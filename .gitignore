@@ -1,2 +1,8 @@
 .env
-*.md
+node_modules/
+.next/
+data/
+public/audio/
+*.log
+next-env.d.ts
+.*
