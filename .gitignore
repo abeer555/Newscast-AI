@@ -6,3 +6,4 @@ public/audio/
 *.log
 next-env.d.ts
 .*
+*.md
