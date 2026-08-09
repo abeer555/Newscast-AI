@@ -8,7 +8,7 @@ export interface NewsSource {
 }
 
 export const NEWS_SOURCES: NewsSource[] = [
-  { id: "reuters", name: "Reuters", url: "https://feeds.reuters.com/reuters/topNews", language: "en", lean: "wire", country: "global" },
+  { id: "dw", name: "Deutsche Welle", url: "https://rss.dw.com/xml/rss-en-all", language: "en", lean: "center", country: "de" },
   { id: "ap", name: "Associated Press", url: "https://feedx.net/rss/ap.xml", language: "en", lean: "wire", country: "us" },
   { id: "bbc", name: "BBC News", url: "https://feeds.bbci.co.uk/news/world/rss.xml", language: "en", lean: "center", country: "uk" },
   { id: "guardian", name: "The Guardian", url: "https://www.theguardian.com/world/rss", language: "en", lean: "center-left", country: "uk" },

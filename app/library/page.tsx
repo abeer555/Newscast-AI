@@ -1,0 +1,123 @@
+"use client";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { api, fmtDuration, timeAgo, useStore, useInterval } from "@/lib/store";
+import AudioPlayer from "@/components/AudioPlayer";
+
+interface Ep {
+  id: string; title: string; status: string; format: string; language: string; audio_path: string | null;
+  audio_duration: number | null; evaluation: { overall: number; verdict: string } | null; created_at: number;
+  play_count: number; stage_label: string; progress: number; cluster_category: string | null;
+}
+
+export default function LibraryPage() {
+  const [eps, setEps] = useState<Ep[]>([]);
+  const [loading, setLoading] = useState(true);
+  const episodeProgress = useStore((s) => s.episodeProgress);
+  const pushToast = useStore((s) => s.pushToast);
+
+  const load = async () => {
+    const j = await api<{ episodes: Ep[] }>("/api/episodes");
+    setEps(j.episodes);
+    setLoading(false);
+  };
+  useEffect(() => { void load(); }, []);
+  const anyRunning = eps.some((e) => !["ready", "failed"].includes(e.status));
+  useInterval(load, anyRunning ? 3000 : null);
+  useInterval(load, 20000);
+
+  const del = async (id: string) => {
+    await api(`/api/episodes/${id}`, { method: "DELETE" });
+    pushToast("Episode deleted", "info");
+    load();
+  };
+
+  const ready = eps.filter((e) => e.status === "ready");
+  const inFlight = eps.filter((e) => !["ready", "failed"].includes(e.status));
+  const failed = eps.filter((e) => e.status === "failed");
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Podcast Library</h1>
+          <div className="page-sub">Every episode your newsroom has produced.</div>
+        </div>
+        <Link href="/" className="btn primary">＋ New episode</Link>
+      </div>
+
+      {inFlight.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 10 }}>On the line</div>
+          <div className="grid c2">
+            {inFlight.map((e) => {
+              const live = episodeProgress[e.id];
+              return (
+                <Link href={`/studio/${e.id}`} key={e.id} className="card pad">
+                  <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 8 }}>{e.title === "Generating…" ? "New episode" : e.title}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
+                    <span className="muted">{live?.stageLabel ?? e.stage_label}</span>
+                    <span className="mono dim">{Math.round((live?.progress ?? e.progress) * 100)}%</span>
+                  </div>
+                  <div className="progress-track"><div className="progress-fill" style={{ width: `${(live?.progress ?? e.progress) * 100}%` }} /></div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {loading ? <div className="skeleton" style={{ height: 300 }} /> : ready.length === 0 && inFlight.length === 0 ? (
+        <div className="card pad" style={{ textAlign: "center", padding: 60 }}>
+          <div style={{ fontSize: 42, marginBottom: 12 }}>🎙</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No episodes yet</div>
+          <div className="muted">Pick a story on the Command Deck and hit <b>Produce podcast</b>.</div>
+        </div>
+      ) : (
+        <div className="grid c3">
+          {ready.map((e) => (
+            <div key={e.id} className="card pad" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                  <span className="chip ai">{e.format}</span>
+                  <span className="chip">{e.language === "ar" ? "العربية" : "EN"}</span>
+                  {e.cluster_category && <span className="chip cat">{e.cluster_category}</span>}
+                  {e.evaluation && <span className="chip good">★ {e.evaluation.overall}</span>}
+                </div>
+                <Link href={`/studio/${e.id}`} style={{ fontWeight: 650, fontSize: 15.5, lineHeight: 1.4 }}>{e.title}</Link>
+              </div>
+              {e.audio_path && <AudioPlayer compact src={e.audio_path} episodeId={e.id} duration={e.audio_duration} />}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
+                <span className="dim" style={{ fontSize: 12 }}>{fmtDuration(e.audio_duration)} · {e.play_count} plays · {timeAgo(e.created_at)}</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <Link href={`/studio/${e.id}`} className="btn sm">Studio</Link>
+                  <button className="btn sm danger" onClick={() => del(e.id)}>✕</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {failed.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 10 }}>Needs attention</div>
+          <div className="grid c3">
+            {failed.map((e) => (
+              <div key={e.id} className="card pad" style={{ borderColor: "rgba(255,107,107,0.3)" }}>
+                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>{e.title === "Generating…" ? "Episode (interrupted)" : e.title}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <span className="chip trend">✕ failed</span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button className="btn sm primary" onClick={async () => { await api(`/api/episodes/${e.id}/synthesize`, { method: "POST" }); pushToast("Resuming…", "info"); load(); }}>Resume</button>
+                    <Link href={`/studio/${e.id}`} className="btn sm">Open</Link>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

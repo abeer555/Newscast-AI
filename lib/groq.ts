@@ -52,7 +52,7 @@ export async function chat(opts: ChatOpts): Promise<{ content: string; model: st
 
   const p = (async () => {
     const start = Date.now();
-    const params: Groq.Chat.CompletionCreateParams = {
+    const params: Record<string, unknown> = {
       model,
       messages: [
         { role: "system", content: opts.system },
@@ -65,19 +65,21 @@ export async function chat(opts: ChatOpts): Promise<{ content: string; model: st
       params.response_format = {
         type: "json_schema",
         json_schema: { name: opts.jsonSchema.name, strict: true, schema: opts.jsonSchema.schema },
-      } as Groq.Chat.CompletionCreateParams["response_format"];
+      };
     } else if (opts.jsonObject) {
       params.response_format = { type: "json_object" };
     }
 
     let resp;
     try {
-      resp = await groq().chat.completions.create(params);
+      resp = await groq().chat.completions.create(params as never);
     } catch (e: unknown) {
       // Fallback: structured model → general model with json_object mode
       if (opts.jsonSchema && model !== LLM.general) {
+        // json_object mode requires the literal word "json" in a message
+        (params.messages as { role: string; content: string }[])[1].content += "\n\nRespond with a single valid JSON object only.";
         const fb = { ...params, model: LLM.general, response_format: { type: "json_object" } as const };
-        const retry = await groq().chat.completions.create(fb);
+        const retry = await groq().chat.completions.create(fb as never);
         const latencyMs = Date.now() - start;
         logAnalytics("llm_call", LLM.general, latencyMs, retry.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined, { fallback: true, schema: opts.jsonSchema.name });
         return { content: retry.choices[0]?.message?.content ?? "", model: LLM.general, latencyMs };

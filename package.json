@@ -3,16 +3,16 @@
   "version": "1.0.0",
   "description": "NEWSCAST AI — autonomous newsroom intelligence & podcast studio",
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -p 3150",
     "build": "next build",
-    "start": "next start -p 3000"
+    "start": "next start -p 3100"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/abeer555/Newscast-AI.git"
   },
   "keywords": [],
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/abeer555/Newscast-AI/issues"
   },
