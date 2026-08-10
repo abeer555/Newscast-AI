@@ -84,21 +84,17 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
 
   opts.onProgress?.(0.55, "Building Ken Burns clips");
 
-  // --- pass 1: per-beat zoom clip
-  // Anti-jitter fix:
-  //  · crop 16:9 so no letterboxing inside zoompan
-  //  · oversized canvas (6400x3600) so zoompan's integer x/y rounding error is ~4 wide-pixels
-  //    at output time (vs ~1 at native 1280x720)
-  //  · scale down ONCE at the end — never multiple zoompan windows
+  // --- pass 1: per-beat smooth Ken Burns
+  // Zoompan snaps x/y to integer offsets → 1px frame-to-frame jitter at 720p. Run it on an
+  // OVERSIZED canvas (≈4x output) so its integer hops become 0.25 output-pixels (invisible),
+  // then scale down once with lanczos.
   const clipPaths: string[] = [];
   for (let i = 0; i < n; i++) {
     const out = path.join(framesDir, `clip_${String(i).padStart(3, "0")}.mp4`);
     const frames = Math.max(8, Math.ceil(frameDur[i] * FPS));
-    const Z0 = 1.0, Z1 = 1.20; // modest — read clearly over the beat without wobble
     const dir = i % 2 === 0 ? 1 : -1;
-    const viaIn = `zoompan=z='${Z0}+(${Z1 - Z0})*on/${frames}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=${frames}:s=6400x3600:fps=${FPS}`;
-    const viaOut = `zoompan=z='${Z1}+(${Z0 - Z1})*on/${frames}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=${frames}:s=6400x3600:fps=${FPS}`;
-    const zoom = dir > 0 ? viaIn : viaOut;
+    const Z0 = 1.0, Z1 = 1.18;
+    const zExpr = dir > 0 ? `${Z0}+(${Z1 - Z0})*on/${frames}` : `${Z1}+(${Z0 - Z1})*on/${frames}`;
     await run("ffmpeg", [
       "-y",
       "-loop", "1",
@@ -106,10 +102,10 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
       "-i", opts.frames[i],
       "-vf",
       [
+        // crop 16:9 then big upscale — zoompan gets a dense grid so integer hops are sub-pixel
         "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)'",
-        zoom,
-        // scale down once — lanczos at output for clean aa after the oversized window
-        `scale=${W}:${H}:flags=lanczos:eval=init`,
+        "scale=5120:2880:flags=lanczos",
+        `zoompan=z='${zExpr}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s=${W}x${H}:fps=${FPS}`,
         "format=yuv420p",
         "setsar=1",
       ].join(","),

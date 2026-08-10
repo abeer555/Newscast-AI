@@ -29,11 +29,11 @@ export interface VisualPlan {
 }
 
 const MODE_HINTS: Record<VisualMode, string> = {
-  generated: "editorial illustration, painterly texture, muted palette",
-  map: "top-down cartographic illustration, terrain, borders, labels implied via composition only, streets as dark lines, no text, teal-and-amber palette",
-  data: "infographic style, abstract geometric data visualization, horizontal bars or line shapes rendered as physical objects, no digits or letters, muted palette",
-  sourced: "close-up of physical evidence: official document with visible redaction bars and seals, newspaper front page on a desk, passport stamps, no readable headlines, no real names, no real-watermarks",
-  archival: "film-grain archival photograph, slight sepia or desaturated teal, 1970s-1990s press-photography feel, historic mood",
+  generated: "editorial illustration, painterly texture, muted palette, ABSOLUTELY NO text or letters anywhere",
+  map: "top-down cartographic illustration, terrain, borders — visually encoded only with color and line, ABSOLUTELY NO letters, street names, or labels",
+  data: "abstract infographic as physical objects — bars as concrete slabs, trends as winding roads — ABSOLUTELY NO digits, letters, or axis labels",
+  sourced: "close-up of a physical document or artifact (redaction bars, seals, folded paper) — ABSOLUTELY NO readable words, names, or logos on it",
+  archival: "film-grain archival photograph, slight sepia or desaturated teal, 1970s-1990s press-photography feel — ABSOLUTELY NO text overlays",
 };
 
 /**
@@ -70,8 +70,10 @@ Rewrite each beat's image_prompt so the style matches the chosen mode. Mode-spec
 - generated: ${MODE_HINTS.generated}
 - map: ${MODE_HINTS.map}
 - data: ${MODE_HINTS.data}
-- sourced: ${MODE_HINTS.sourced}
+- sourced: close-up of physical evidence: official-looking document with visible redaction bars and seals, newspaper front page on a desk, passport stamps — but NEVER readable text or real names (image models cannot render legible words)
 - archival: ${MODE_HINTS.archival}
+
+CRITICAL: the image generator cannot render text. Every prompt must say "no text, no letters, no words, no typography" and all visuals must be symbolic: maps, buildings, people, scenery, abstract shapes, documents-as-objects. NEVER ask for a specific headline, sign, nameplate, or written word.
 
 Output JSON: {"beats":[{"beat_index":0,"mode":"generated","prompt":"...","rationale":"...","fact_ids":["id1"]}], "default_mode":"generated"}
 The beat_index values must be exactly 0..N-1 (NOT 1-based) in the same order as the input list. Do not reorder or skip.`,

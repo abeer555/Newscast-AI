@@ -138,7 +138,7 @@ export default function StoryPage() {
                 <div className="card pad">
                   <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 12 }}>Key facts</div>
                   <div style={{ display: "grid", gap: 10 }}>
-                    {intel.key_facts.map((f, i) => (
+                    {(intel.key_facts ?? []).map((f, i) => (
                       <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                         <span style={{ width: 8, height: 8, borderRadius: "50%", background: CONF_COLOR[f.confidence] ?? "var(--text-3)", marginTop: 6, flexShrink: 0 }} title={f.confidence} />
                         <div>
@@ -164,11 +164,11 @@ export default function StoryPage() {
                   <div className="grid c2">
                     <div>
                       <div className="muted" style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>All sources agree</div>
-                      <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, fontSize: 13.5 }}>{intel.consensus.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                      <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, fontSize: 13.5 }}>{(intel.consensus ?? []).map((c, i) => <li key={i}>{c}</li>)}</ul>
                     </div>
                     <div>
                       <div className="muted" style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>Where coverage diverges</div>
-                      <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, fontSize: 13.5 }}>{intel.disagreements.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                      <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, fontSize: 13.5 }}>{(intel.disagreements ?? []).map((c, i) => <li key={i}>{c}</li>)}</ul>
                     </div>
                   </div>
                 </div>
@@ -182,7 +182,7 @@ export default function StoryPage() {
                   <div className="hr" />
                   <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, margin: "10px 0 10px" }}>Entities</div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {intel.entities.map((e, i) => <span key={i} className="chip">{e.type === "person" ? "👤" : e.type === "org" ? "🏢" : e.type === "place" ? "📍" : "•"} {e.name}</span>)}
+                    {(intel.entities ?? []).map((e, i) => <span key={i} className="chip">{e.type === "person" ? "👤" : e.type === "org" ? "🏢" : e.type === "place" ? "📍" : "•"} {e.name}</span>)}
                   </div>
                 </div>
                 <div className="card pad" style={{ background: "linear-gradient(135deg, rgba(91,227,200,0.07), rgba(79,195,255,0.05))" }}>
@@ -195,7 +195,7 @@ export default function StoryPage() {
 
           {tab === "framing" && (
             <div className="grid c2">
-              {intel.framing.map((f, i) => (
+              {(intel.framing ?? []).map((f, i) => (
                 <div key={i} className="card pad">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                     <div>
@@ -217,12 +217,12 @@ export default function StoryPage() {
 
           {tab === "timeline" && (
             <div className="card pad" style={{ maxWidth: 780 }}>
-              {intel.timeline.map((t, i) => (
-                <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 24px 1fr", gap: 12, paddingBottom: i < intel.timeline.length - 1 ? 18 : 0 }}>
+              {(intel.timeline ?? []).map((t, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 24px 1fr", gap: 12, paddingBottom: i < (intel.timeline?.length ?? 0) - 1 ? 18 : 0 }}>
                   <div className="mono dim" style={{ fontSize: 12, textAlign: "right" }}>{t.time}</div>
                   <div style={{ position: "relative", display: "flex", justifyContent: "center" }}>
                     <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--accent)", flexShrink: 0, zIndex: 1, marginTop: 2 }} />
-                    {i < intel.timeline.length - 1 && <div style={{ position: "absolute", top: 14, bottom: -18, width: 2, background: "var(--line)" }} />}
+                    {i < (intel.timeline?.length ?? 0) - 1 && <div style={{ position: "absolute", top: 14, bottom: -18, width: 2, background: "var(--line)" }} />}
                   </div>
                   <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>{t.event}</div>
                 </div>

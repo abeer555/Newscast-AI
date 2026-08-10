@@ -24,9 +24,9 @@ export interface Storyboard {
 
 /** One visual identity for the whole show so every beat looks like it belongs to the same film. */
 export const STYLE_BLOCK =
-  "cinematic editorial news illustration, muted teal-and-amber palette, volumetric light, subtly painterly texture, shallow film grain, wide 16:9 composition, no text, no words, no watermarks, no logos";
+  "cinematic editorial news illustration, muted teal-and-amber palette, volumetric light, subtly painterly texture, shallow film grain, wide 16:9 composition, ABSOLUTELY NO text, NO letters, NO words, NO typography of any kind, NO logos, NO watermarks, NO signs";
 export const NEGATIVE_BLOCK =
-  "text, words, letters, captions, subtitles, watermarks, logos, low quality, blurry, bad anatomy, extra digits, gore, nsfw, deformed";
+  "text, words, letters, captions, subtitles, headlines, signage, logos, watermarks, ANY typography, low quality, blurry, bad anatomy, extra digits, gore, nsfw, deformed";
 
 /**
  * Stage 1 of the video pipeline — "how should the video look".

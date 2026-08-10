@@ -25,13 +25,19 @@ const clients: Record<string, OpenAI> = {};
 export function nvidia(): OpenAI {
   const key = process.env.NVIDIA_api ?? process.env.NVIDIA_API_KEY;
   if (!key) throw new Error("NVIDIA_api key missing in .env");
-  if (!clients.nvidia) clients.nvidia = new OpenAI({ baseURL: "https://integrate.api.nvidia.com/v1", apiKey: key, timeout: 170_000 });
+  // Nemotron Ultra 550B can take 60-120s on a long prompt; allow up to 5 min before aborting.
+  if (!clients.nvidia) clients.nvidia = new OpenAI({
+    baseURL: "https://integrate.api.nvidia.com/v1",
+    apiKey: key,
+    timeout: 300_000,
+    maxRetries: 1, // never auto-retry on timeouts — those queries take minutes
+  });
   return clients.nvidia;
 }
 export function groqSdk(): OpenAI {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error("GROQ_API_KEY missing");
-  if (!clients.groq) clients.groq = new OpenAI({ baseURL: "https://api.groq.com/openai/v1", apiKey: key, timeout: 60_000 });
+  if (!clients.groq) clients.groq = new OpenAI({ baseURL: "https://api.groq.com/openai/v1", apiKey: key, timeout: 90_000, maxRetries: 1 });
   return clients.groq;
 }
 

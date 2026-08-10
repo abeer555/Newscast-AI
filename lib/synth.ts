@@ -100,18 +100,37 @@ export async function synthesizeEpisode(opts: {
   onProgress?: (done: number, total: number) => void;
 }): Promise<{ audioPath: string; durationSec: number; segmentCount: number }> {
   const buffers: Buffer[] = [];
-  const tasks: { text: string; voice: string }[] = [];
+
+  // Merge consecutive same-voice segments into ~190-char utterances to minimize API calls.
+  // Orpheus cap is 200 chars/call. Packing segments cuts Groq TTS call count 3-5x.
+  const merged: { text: string; voice: string }[] = [];
+  let cur: { text: string; voice: string } | null = null;
   for (const seg of opts.script.segments) {
-    const input = seg.direction && opts.language === "en" ? `[${seg.direction}] ${seg.text}` : seg.text;
-    for (const chunk of chunkForTTS(input)) tasks.push({ text: chunk, voice: seg.voice });
+    const dir = seg.direction && opts.language === "en" ? `[${seg.direction}] ` : "";
+    const piece = dir + seg.text; // this is what actually gets voiced
+    if (!seg.text.trim()) continue;
+    if (cur && cur.voice === seg.voice) {
+      const next = cur.text + (cur.text ? " " : "") + piece;
+      if (next.length <= 190) { cur.text = next; continue; }
+    }
+    if (cur) merged.push(cur);
+    cur = { text: piece, voice: seg.voice };
   }
+  if (cur && cur.text) merged.push(cur);
+
+  // Final safety: split any still-too-long utterance on sentence boundaries
+  const tasks: { text: string; voice: string }[] = [];
+  for (const t of merged) {
+    if (t.text.length <= 190) tasks.push(t);
+    else tasks.push(...chunkForTTS(t.text).map((text) => ({ text, voice: t.voice })));
+  }
+
   let done = 0;
   for (const t of tasks) {
     const buf = await retryTTS(t.text, t.voice, opts.language);
     buffers.push(buf);
     done++;
     opts.onProgress?.(done, tasks.length);
-    // gentle pacing to respect the on-demand TPD budget
     if (done < tasks.length) await new Promise((r) => setTimeout(r, 350));
   }
   const combined = concatWavs(buffers);
