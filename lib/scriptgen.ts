@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 import { analyzeCluster, StoryIntelligence } from "./intelligence";
-import { chatJson } from "./groq";
+import { chatJson } from "./chat";
 
 export interface ScriptSegment {
   index: number;

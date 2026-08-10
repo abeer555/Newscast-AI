@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { chatJson } from "./groq";
+import { chatJson, LLM_MODELS } from "./chat";
 
 export interface SourceFraming {
   source: string;
@@ -32,78 +32,34 @@ export interface StoryIntelligence {
   disagreements: string[];
   timeline: TimelineEvent[];
   podcast_angle: string;
+  regions: string[];
 }
 
-const INTEL_SCHEMA = {
-  name: "story_intelligence",
-  schema: {
-    type: "object",
-    properties: {
-      headline: { type: "string" },
-      lede: { type: "string" },
-      summary_long: { type: "string" },
-      category: { type: "string" },
-      importance: { type: "number" },
-      sentiment: { type: "number" },
-      key_facts: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            fact: { type: "string" },
-            confidence: { type: "string", enum: ["confirmed", "reported", "disputed"] },
-          },
-          required: ["fact", "confidence"],
-          additionalProperties: false,
-        },
-      },
-      entities: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-            type: { type: "string", enum: ["person", "org", "place", "other"] },
-          },
-          required: ["name", "type"],
-          additionalProperties: false,
-        },
-      },
-      why_it_matters: { type: "string" },
-      what_next: { type: "string" },
-      framing: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            source: { type: "string" },
-            lean: { type: "string" },
-            headline: { type: "string" },
-            framing: { type: "string" },
-            emphasis: { type: "array", items: { type: "string" } },
-            tone: { type: "string", enum: ["alarmed", "neutral", "optimistic", "critical", "celebratory", "cautious"] },
-            omits: { type: "string" },
-          },
-          required: ["source", "lean", "headline", "framing", "emphasis", "tone", "omits"],
-          additionalProperties: false,
-        },
-      },
-      consensus: { type: "array", items: { type: "string" } },
-      disagreements: { type: "array", items: { type: "string" } },
-      timeline: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: { time: { type: "string" }, event: { type: "string" } },
-          required: ["time", "event"],
-          additionalProperties: false,
-        },
-      },
-      podcast_angle: { type: "string" },
-    },
-    required: ["headline", "lede", "summary_long", "category", "importance", "sentiment", "key_facts", "entities", "why_it_matters", "what_next", "framing", "consensus", "disagreements", "timeline", "podcast_angle"],
-    additionalProperties: false,
-  },
+const INTEL_SHAPE = {
+  headline: "string — precise, neutral event headline (not clickbait)",
+  lede: "string — one sentence capturing who/what/where/when/why",
+  summary_long: "string — 4-6 sentence synthesis across ALL outlets",
+  category: "string — politics|conflict|technology|business|health|climate|sports|science|general",
+  importance: "number 0-100 global significance",
+  sentiment: "number -1..1 emotional valence",
+  key_facts: [{ fact: "string", confidence: "confirmed|reported|disputed" }],
+  entities: [{ name: "string", type: "person|org|place|other" }],
+  why_it_matters: "string — 2-3 sentences of stakes and second-order effects",
+  what_next: "string — concrete developments to watch",
+  framing: [{
+    source: "string — outlet name, exactly as given",
+    lean: "string — editorial lean as given",
+    headline: "string — that outlet's headline",
+    framing: "string — 2 sentences: how this outlet tells the story and what narrative it serves",
+    emphasis: ["string — 3-5 specific things this outlet foregrounds"],
+    tone: "alarmed|neutral|optimistic|critical|celebratory|cautious",
+    omits: "string — what this outlet leaves out that others include",
+  }],
+  consensus: ["string — facts ALL sources agree on"],
+  disagreements: ["string — where coverage materially diverges"],
+  timeline: [{ time: "ISO timestamp or relative label like 'Tuesday morning'", event: "string" }],
+  podcast_angle: "string — the strongest narrative hook for listeners: a tension, question, or human stake",
+  regions: ["string — geographic regions involved"],
 };
 
 export async function analyzeCluster(clusterId: string, force = false): Promise<StoryIntelligence> {
@@ -114,31 +70,36 @@ export async function analyzeCluster(clusterId: string, force = false): Promise<
 
   const articles = db
     .prepare(
-      `SELECT a.title, a.summary, a.content, a.published_at, a.url, s.name AS source_name, s.lean
+      `SELECT a.title, a.summary, a.content, a.published_at, a.url, s.name AS source_name, s.lean, s.country
        FROM cluster_articles ca JOIN articles a ON a.id=ca.article_id JOIN sources s ON s.id=a.source_id
-       WHERE ca.cluster_id=? ORDER BY a.published_at DESC LIMIT 10`
+       WHERE ca.cluster_id=? ORDER BY a.published_at DESC LIMIT 12`
     )
-    .all(clusterId) as { title: string; summary: string; content: string; published_at: number; url: string; source_name: string; lean: string }[];
+    .all(clusterId) as { title: string; summary: string; content: string; published_at: number; url: string; source_name: string; lean: string; country: string }[];
 
   const dossier = articles
     .map((a, i) => {
-      const body = (a.content || a.summary || "").slice(0, 900);
-      return `--- ARTICLE ${i + 1} | SOURCE: ${a.source_name} (lean: ${a.lean}) | ${new Date(a.published_at).toUTCString()} ---\nHEADLINE: ${a.title}\nURL: ${a.url}\n${body}`;
+      const body = (a.content || a.summary || "").slice(0, 1100);
+      return `--- ARTICLE ${i + 1} | SOURCE: ${a.source_name} (${a.country}, lean: ${a.lean}) | PUBLISHED: ${new Date(a.published_at).toUTCString()} ---\nHEADLINE: ${a.title}\nBODY: ${body}`;
     })
     .join("\n\n");
 
-  const { data, model } = await chatJson<StoryIntelligence>({
+  const { data } = await chatJson<StoryIntelligence>({
+    model: LLM_MODELS.frontier,
     system:
-      "You are the senior intelligence editor at NEWSCAST AI, an autonomous newsroom. Analyze multi-source coverage of a news event. Produce precise, non-partisan, deeply-reported intelligence. Compare how each outlet frames the event: what they emphasize, omit, and their tone. importance is 0-100 (global significance). sentiment is -1..1 (story emotional valence). Consensus lists facts ALL sources agree on; disagreements lists where coverage diverges. Timeline: 3-8 chronological events. podcast_angle: the most compelling narrative hook for an audio episode.",
-    user: `Here are ${articles.length} articles covering one event. Produce the full intelligence dossier.\n\n${dossier}`,
-    jsonSchema: INTEL_SCHEMA,
-    maxTokens: 6000,
-    temperature: 0.4,
+      "You are the chief intelligence editor of NEWSCAST AI, a global newsroom synthesizing multi-outlet coverage into authoritative, non-partisan briefings for informed professionals. Rules you live by: synthesize ACROSS outlets rather than paraphrasing one; attribute unconfirmed claims to their source; rigorously separate confirmed facts from reported claims from disputed assertions; describe each outlet's framing concretely — their lead facts, word choices, and conspicuous omissions; reconstruct timelines from actual timestamps in the articles. You are precise, fair, and allergic to spin.",
+    user: `Below are ${articles.length} articles from different outlets covering the same event. Build the complete intelligence dossier.
+
+${dossier}
+
+Respond with a single JSON object using EXACTLY this shape:
+${JSON.stringify(INTEL_SHAPE, null, 1)}`,
+    jsonSchema: { schema: { properties: {} } },
+    maxTokens: 8000,
+    temperature: 0.35,
+    task: "intelligence",
   });
 
-  // stamp category + entities back onto the cluster
   db.prepare("UPDATE clusters SET intelligence=?, intelligence_at=?, category=?, entities=?, pipeline_stage='analyzed', title=? WHERE id=?")
     .run(JSON.stringify(data), Date.now(), data.category, JSON.stringify(data.entities.map((e) => e.name)), data.headline, clusterId);
-  void model;
   return data;
 }

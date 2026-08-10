@@ -97,6 +97,11 @@ function migrate(db: Database.Database) {
       audio_path TEXT,
       audio_duration REAL,
       audio_segments INTEGER,
+      storyboard TEXT,          -- JSON: {style, aspect, beats:[{index,image_prompt,negative_prompt,caption,duration,segment_range,frame_path}]}
+      video_path TEXT,
+      video_duration REAL,
+      video_status TEXT,        -- pending | storyboard | rendering | ready | failed
+      video_error TEXT,
       evaluation TEXT,          -- JSON evaluation blob
       generation_cache TEXT,    -- JSON of request that produced the episode (idempotency)
       play_count INTEGER DEFAULT 0,
@@ -141,6 +146,49 @@ function migrate(db: Database.Database) {
       latency_ms INTEGER DEFAULT 0,
       meta TEXT,
       created_at INTEGER NOT NULL
+    );
+
+    -- evidence layer: claims, sourcing, independence, contradictions, snapshots
+    CREATE TABLE IF NOT EXISTS cluster_facts (
+      id TEXT PRIMARY KEY,
+      cluster_id TEXT NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+      claim TEXT NOT NULL,
+      claim_hash TEXT NOT NULL,       -- dedupe across runs
+      status TEXT NOT NULL,           -- confirmed | reported | disputed | retracted
+      support_count INTEGER DEFAULT 0,     -- distinct canonical original sources attesting
+      attestation_json TEXT NOT NULL,      -- [{article_id, source, url, original_source, attests}]
+      canonical_origins TEXT NOT NULL,     -- JSON array of gatekept original outlets
+      contradicted_by TEXT,                -- other fact_id(s) opposing this claim
+      confidence REAL,                     -- 0..1 final confidence
+      first_seen INTEGER, last_seen INTEGER,
+      UNIQUE(cluster_id, claim_hash)
+    );
+    CREATE INDEX IF NOT EXISTS idx_facts_cluster ON cluster_facts(cluster_id);
+
+    CREATE TABLE IF NOT EXISTS living_story (
+      cluster_id TEXT PRIMARY KEY REFERENCES clusters(id) ON DELETE CASCADE,
+      current_summary TEXT NOT NULL,        -- fused, evolving narrative
+      current_summary_at INTEGER,
+      version INTEGER DEFAULT 1,             -- bump on each fusion
+      timeline TEXT NOT NULL,                -- JSON [{t, event, source_ids:, fact_ids:}] sorted ISO
+      last_fused_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS editorials (
+      cluster_id TEXT PRIMARY KEY REFERENCES clusters(id) ON DELETE CASCADE,
+      bias_json TEXT NOT NULL,               -- per-outlet tone/omission vector
+      whats_solid TEXT NOT NULL,             -- consensus claims
+      whats_contested TEXT,                  -- disputed claims with both frames
+      whats_unknown TEXT,                    -- gaps in coverage
+      updated_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS publish_gates (
+      episode_id TEXT PRIMARY KEY REFERENCES episodes(id) ON DELETE CASCADE,
+      score REAL NOT NULL,                   -- 0..1 overall publication confidence
+      verdict TEXT NOT NULL,                 -- publish | needs_review
+      reasons TEXT NOT NULL,                 -- JSON array of gate decisions
+      decided_at INTEGER NOT NULL
     );
   `);
 

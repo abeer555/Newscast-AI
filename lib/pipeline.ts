@@ -1,9 +1,21 @@
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { getDb } from "./db";
 import { generateScript, EpisodeFormat, PodcastScript } from "./scriptgen";
 import { synthesizeEpisode } from "./synth";
-import { chatJson } from "./groq";
+import { chatJson } from "./chat";
 import { episodeProgress, logEvent } from "./bus";
+import { enqueueVideoRender } from "./videoQueue";
+import { planStoryboard, Storyboard, Beat } from "./storyboard";
+import { StoryIntelligence } from "./intelligence";
+import { comfyAvailable, generateImage } from "./comfyui";
+import { renderEpisodeVideo } from "./video";
+import { attestClaims, detectContradictions, VerifiedFact } from "./verification";
+import { fuseStory } from "./living";
+import { planEvidenceVisuals, VisualPlan } from "./visualplan";
+import { evaluateEpisodeComprehensive, PipelineEvaluation } from "./evaluate";
+
 
 export interface Evaluation {
   scores: {
@@ -69,8 +81,23 @@ export async function runEpisodePipeline(episodeId: string): Promise<void> {
   if (!ep) throw new Error("episode not found");
 
   try {
-    // 1. intelligence
-    emit(episodeId, "analyzing", 0.08, "Analyzing story intelligence");
+    // 1. intelligence + evidence layers
+    emit(episodeId, "analyzing", 0.05, "Analyzing story intelligence");
+    emit(episodeId, "analyzing", 0.10, "Verifying claims across sources");
+    let facts: VerifiedFact[] = [];
+    try {
+      facts = await attestClaims(ep.cluster_id);
+      detectContradictions(facts);
+    } catch (e) {
+      logEvent("error", `Claim verification failed for ${ep.cluster_id}`, String(e));
+    }
+    emit(episodeId, "analyzing", 0.14, "Fusing living story + timeline");
+    try {
+      await fuseStory(ep.cluster_id);
+    } catch (e) {
+      logEvent("error", `Story fusion failed for ${ep.cluster_id}`, String(e));
+    }
+
     // 2. script
     emit(episodeId, "scripting", 0.18, "Writing episode script");
     const { script, intel, model } = await generateScript({ clusterId: ep.cluster_id, format: ep.format, language: ep.language, style: ep.style });
@@ -88,7 +115,7 @@ export async function runEpisodePipeline(episodeId: string): Promise<void> {
     logEvent("pipeline", `Script ready for episode ${episodeId} (${script.segments.length} segments, ${script.estimated_seconds}s)`);
 
     // 3. synthesis (auto-continue — full autopilot)
-    await synthesizeCurrentScript(episodeId, intel);
+    await synthesizeCurrentScript(episodeId, intel, facts);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const friendly = msg.startsWith("TERMS_REQUIRED:")
@@ -100,7 +127,7 @@ export async function runEpisodePipeline(episodeId: string): Promise<void> {
   }
 }
 
-export async function synthesizeCurrentScript(episodeId: string, intel?: unknown): Promise<void> {
+export async function synthesizeCurrentScript(episodeId: string, intelArg?: unknown, factsArg?: VerifiedFact[]): Promise<void> {
   const db = getDb();
   const ep = db.prepare("SELECT * FROM episodes WHERE id=?").get(episodeId) as {
     id: string; language: "en" | "ar"; script: string | null; cluster_id: string;
@@ -109,9 +136,20 @@ export async function synthesizeCurrentScript(episodeId: string, intel?: unknown
   const script = JSON.parse(ep.script) as PodcastScript;
 
   // refresh intel for evaluation
-  if (!intel) {
+  let intel: StoryIntelligence | null = null;
+  if (intelArg) intel = intelArg as StoryIntelligence;
+  else {
     const cl = db.prepare("SELECT intelligence FROM clusters WHERE id=?").get(ep.cluster_id) as { intelligence: string | null };
     intel = cl?.intelligence ? JSON.parse(cl.intelligence) : null;
+  }
+
+  // Evidence sets (refresh if missing)
+  let facts = factsArg;
+  if (!facts) {
+    try { facts = db.prepare("SELECT * FROM cluster_facts WHERE cluster_id=?").all(ep.cluster_id) as VerifiedFact[]; } catch { facts = []; }
+  }
+  if (!facts.length) {
+    try { facts = await attestClaims(ep.cluster_id); detectContradictions(facts); } catch { /* soft-fail */ }
   }
 
   emit(episodeId, "synthesizing", 0.45, "Synthesizing voices");
@@ -121,7 +159,7 @@ export async function synthesizeCurrentScript(episodeId: string, intel?: unknown
     script,
     language: ep.language,
     onProgress: (done, total) => {
-      const p = 0.45 + 0.4 * (done / total);
+      const p = 0.45 + 0.3 * (done / total);
       emit(episodeId, "synthesizing", Math.round(p * 100) / 100, `Voicing segment ${Math.min(done, totalSegs)}/${totalSegs}`);
     },
   });
@@ -130,29 +168,85 @@ export async function synthesizeCurrentScript(episodeId: string, intel?: unknown
     audio_path: result.audioPath,
     audio_duration: result.durationSec,
     audio_segments: result.segmentCount,
-    progress: 0.88,
+    progress: 0.75,
     stage_label: "Evaluating episode quality",
     status: "evaluating",
   });
-  episodeProgress(episodeId, "evaluating", 0.88, "Evaluating episode quality");
+  episodeProgress(episodeId, "evaluating", 0.75, "Evaluating episode quality");
   logEvent("pipeline", `Audio synthesized for ${episodeId}: ${result.durationSec}s across ${result.segmentCount} segments`);
 
-  // 4. evaluation
+  // 4. comprehensive evaluation + publish gate
+  let evalNote: string | null = null;
+  let publishDecision: "publish" | "needs_review" = "publish";
+  let publishScore = 0;
   try {
-    const evaluation = await evaluateEpisode(script, intel);
-    setEpisode(episodeId, {
-      evaluation: JSON.stringify(evaluation),
-      status: "ready",
-      progress: 1,
-      stage_label: "Ready",
-      published_at: Date.now(),
+    // Build a visual plan proxy (mode weights) so evaluation sees picture-intent
+    const stubVisuals: VisualPlan = {
+      default_mode: "generated",
+      beats: ((): VisualPlan["beats"] => {
+        return (script.segments || []).slice(0, 8).map((_, i) => ({ beat_index: i, mode: "generated" as const, prompt: "", rationale: "not generated yet", fact_ids: [] }));
+      })(),
+    };
+    const evaluation: PipelineEvaluation = await evaluateEpisodeComprehensive({
+      script,
+      intel,
+      facts,
+      visualPlan: stubVisuals,
+      audioDurationSec: result.durationSec,
     });
-    episodeProgress(episodeId, "ready", 1, "Ready", { evaluation });
-    logEvent("pipeline", `Episode ${episodeId} ready — quality ${evaluation.overall}/100 (${evaluation.verdict})`);
+    publishDecision = evaluation.decision;
+    publishScore = evaluation.publish_confidence;
+    setEpisode(episodeId, { evaluation: JSON.stringify({
+      // keep legacy "scores" key structure intact so the existing UI chip still works
+      scores: {
+        accuracy: evaluation.scores.factual_accuracy,
+        balance: evaluation.scores.source_coverage,
+        clarity: evaluation.scores.narrative_clarity,
+        engagement: evaluation.scores.visual_relevance,
+        naturalness: evaluation.scores.audio_quality,
+        syndication: evaluation.scores.syndication_handling,
+        contradiction: evaluation.scores.contradiction_disclosure,
+      },
+      // extended axes:
+      visual_relevance: evaluation.scores.visual_relevance,
+      audio_quality: evaluation.scores.audio_quality,
+      subtitle_sync: evaluation.scores.subtitle_sync,
+      syndication_handling: evaluation.scores.syndication_handling,
+      contradiction_disclosure: evaluation.scores.contradiction_disclosure,
+      publish_confidence: evaluation.publish_confidence,
+      decision: evaluation.decision,
+      reasons: evaluation.reasons,
+      fact_check_notes: evaluation.fact_check_notes,
+      improvements: evaluation.improvements,
+    }) });
+    logEvent("pipeline", `Episode ${episodeId} evaluation score=${evaluation.publish_confidence.toFixed(2)} decision=${evaluation.decision}`);
+
+    // Persist publish gate decision
+    try {
+      db.prepare("INSERT OR REPLACE INTO publish_gates (episode_id, score, verdict, reasons, decided_at) VALUES (?,?,?,?,?)")
+        .run(episodeId, publishScore, publishDecision, JSON.stringify(evaluation.reasons), Date.now());
+    } catch { /* non-fatal */ }
   } catch (e) {
-    // audio exists even if eval fails
-    setEpisode(episodeId, { status: "ready", progress: 1, stage_label: "Ready", published_at: Date.now(), error: `evaluation failed: ${e}` });
-    episodeProgress(episodeId, "ready", 1, "Ready (evaluation skipped)");
+    evalNote = `evaluation failed: ${String(e)}`;
+    logEvent("error", `Evaluation failed for ${episodeId}`, evalNote ?? "");
+  }
+
+  // 5. video + publish gate
+  const isPublished = publishDecision === "publish";
+  const publishedAt = isPublished ? Date.now() : null;
+  setEpisode(episodeId, {
+    status: isPublished ? "ready" : "needs_review",
+    progress: isPublished ? 1 : 0.95,
+    stage_label: isPublished ? "Ready — video render queued" : "Held for human review — confidence too low",
+    published_at: publishedAt,
+  });
+  episodeProgress(episodeId, isPublished ? "ready" : "needs_review", isPublished ? 1 : 0.95, isPublished ? "Ready — video render queued" : "Held for human review");
+  try {
+    if (enqueueVideoRender(episodeId)) {
+      logEvent("pipeline", `Video render queued for ${episodeId}`);
+    }
+  } catch (e) {
+    logEvent("error", `Could not queue video for ${episodeId}`, String(e));
   }
 }
 
@@ -173,7 +267,8 @@ export async function evaluateEpisode(script: PodcastScript, intel: unknown): Pr
     // Durable fallback so the episode still ships with a review card
     const anyIntel = intel && typeof intel === "object" && Object.keys(intel as object).length > 0;
     const intentWords: Record<string, number> = { briefing: 16.5, deepdive: 26, debate: 23 };
-    const density = Math.round(((script.segments.length / ((intentWords as Record<string, number>)[script.format] ?? 20)) * 100 + 100) / 1);
+    const fmt = (script as { format?: string }).format ?? "briefing";
+    const density = Math.round(((script.segments.length / (intentWords[fmt] ?? 20)) * 100 + 100) / 1);
     const clarity = Math.max(0, 100 - Math.round(density / 3));
     return {
       scores: { accuracy: 0, balance: 0, clarity, engagement: 0, naturalness: 0 },
@@ -197,6 +292,82 @@ export async function resumeEpisode(episodeId: string): Promise<void> {
   } else {
     await runEpisodePipeline(episodeId);
   }
+}
+
+/**
+ * Video worker entry — executed by scripts/video-worker.ts in a detached process.
+ * design the look (storyboard) → render one 1280x720 frame per beat on the local
+ * Z-Image-Turbo ComfyUI server → ffmpeg stitches frames into a Ken Burns slideshow
+ * with crossfades, lower-third captions, speaker subtitles and the narration as the
+ * master clock. Idempotent: re-running overwrites the previous storyboard/video.
+ */
+export async function renderEpisodeVideoJob(episodeId: string): Promise<void> {
+  const db = getDb();
+  const ep = db.prepare("SELECT id, cluster_id, script, audio_path, audio_duration FROM episodes WHERE id=?").get(episodeId) as
+    | { id: string; cluster_id: string; script: string | null; audio_path: string | null; audio_duration: number | null }
+    | undefined;
+  if (!ep?.script || !ep.audio_path) throw new Error("video needs a script + synthesized audio");
+
+  const script = JSON.parse(ep.script) as PodcastScript;
+  const cl = db.prepare("SELECT intelligence FROM clusters WHERE id=?").get(ep.cluster_id) as { intelligence: string | null } | undefined;
+  const intel = cl?.intelligence ? (JSON.parse(cl.intelligence) as StoryIntelligence) : null;
+  await renderVideoForEpisode(episodeId, script, intel, ep.audio_duration ?? script.estimated_seconds);
+}
+
+async function renderVideoForEpisode(
+  episodeId: string,
+  script: PodcastScript,
+  intel: StoryIntelligence | null,
+  audioDurationSec: number
+): Promise<void> {
+  const db = getDb();
+
+  if (!(await comfyAvailable())) {
+    setEpisode(episodeId, { video_status: "failed", video_error: `ComfyUI not reachable at ${process.env.COMFYUI_URL ?? "http://127.0.0.1:8188"}` });
+    throw new Error("ComfyUI offline — start it and press Render video");
+  }
+
+  // 1. how should the video look
+  emit(episodeId, "rendering_video", 0.80, "Designing storyboard");
+  setEpisode(episodeId, { video_status: "storyboard" });
+  const board: Storyboard = await planStoryboard(script, intel as StoryIntelligence | null);
+  setEpisode(episodeId, { storyboard: JSON.stringify(board) });
+  logEvent("pipeline", `Storyboard: ${board.beats.length} beats / ${board.total_duration}s for ${episodeId}`);
+
+  // 2. one frame per beat, sequential so the local GPU queue stays shallow
+  const frames: string[] = [];
+  for (let i = 0; i < board.beats.length; i++) {
+    const b: Beat = board.beats[i];
+    emit(episodeId, "rendering_video", Math.round((0.82 + 0.10 * (i / board.beats.length)) * 100) / 100, `Frame ${i + 1}/${board.beats.length} — ${b.caption || "visual"}`);
+    const img = await generateImage({ prompt: b.image_prompt, negative: b.negative_prompt, width: 1280, height: 720, seed: hashSeed(`${episodeId}:${i}`), steps: 8 });
+    frames.push(img.filePath);
+    (board.beats[i] as Beat & { frame_path?: string }).frame_path = img.filePath;
+    setEpisode(episodeId, { storyboard: JSON.stringify(board) });
+  }
+  setEpisode(episodeId, { storyboard: JSON.stringify(board), video_status: "rendering" });
+
+  // 3. stitch
+  emit(episodeId, "rendering_video", 0.94, "Encoding video");
+  const audioAbs = path.join(process.cwd(), "public", `${episodeId}.wav`);
+  const audioInPublic = path.join(process.cwd(), "public", "audio", `${episodeId}.wav`);
+  const audioFile = fs.existsSync(audioInPublic) ? audioInPublic : audioAbs;
+  const out = await renderEpisodeVideo({
+    episodeId,
+    storyboard: board,
+    frames,
+    audioPath: audioFile,
+    audioDuration: audioDurationSec,
+    script,
+  });
+
+  setEpisode(episodeId, { video_path: out.publicPath, video_duration: out.durationSec, video_status: "ready", video_error: null, status: "ready", progress: 1, stage_label: "Ready with video" });
+  episodeProgress(episodeId, "ready", 1, "Ready with video", { video: out.publicPath });
+  logEvent("pipeline", `Video ready for ${episodeId}: ${out.durationSec}s at ${out.publicPath}`);
+}
+
+function hashSeed(s: string): number {
+  const h = crypto.createHash("sha1").update(s).digest();
+  return h.readUInt32BE(0);
 }
 
 export function createEpisode(opts: { clusterId: string; format: EpisodeFormat; language: "en" | "ar"; style: string }): string {

@@ -25,16 +25,41 @@ interface Story {
 const CONF_COLOR: Record<string, string> = { confirmed: "var(--good)", reported: "var(--warm)", disputed: "var(--bad)" };
 const TONE_EMOJI: Record<string, string> = { alarmed: "🚨", neutral: "📰", optimistic: "🌤", critical: "🔍", celebratory: "🎉", cautious: "🧭" };
 
+interface Fact {
+  id: string; claim: string; status: "confirmed" | "reported" | "disputed" | "retracted";
+  support_count: number; confidence: number;
+  canonical_origins: string[];
+  attestation_json: { source: string; attestations: number; url: string; original: boolean }[];
+  contradicted_by: string | null;
+  first_seen: number; last_seen: number;
+}
+interface LivingStory {
+  current_summary: string; current_summary_at: number; version: number;
+  timeline: { t: string; event: string; source_ids: string[] }[];
+  last_fused_at: number;
+}
+interface Evidence {
+  facts: Fact[];
+  contradictions: { fact_id: string; claim: string; contradicts: string }[];
+  living_story: LivingStory | null;
+}
+
 export default function StoryPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const pushToast = useStore((s) => s.pushToast);
   const [story, setStory] = useState<Story | null>(null);
+  const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
-  const [tab, setTab] = useState<"intel" | "framing" | "timeline" | "coverage">("intel");
+  const [tab, setTab] = useState<"intel" | "framing" | "timeline" | "coverage" | "evidence">("intel");
 
-  const load = async () => setStory(await api<Story>(`/api/stories/${id}`));
+  const load = async () => {
+    setStory(await api<Story>(`/api/stories/${id}`));
+    try {
+      setEvidence(await api<Evidence>(`/api/stories/${id}/evidence`));
+    } catch { /* evidence endpoint optional */ }
+  };
   useEffect(() => { void load(); /* eslint-disable-next-line */ }, [id]);
 
   const analyze = async (force = false) => {
@@ -95,10 +120,10 @@ export default function StoryPage() {
       {intel ? (
         <>
           <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-            {(["intel", "framing", "timeline", "coverage"] as const).map((t) => (
+            {(["intel", "framing", "timeline", "coverage", "evidence"] as const).map((t) => (
               <button key={t} className="btn sm" onClick={() => setTab(t)}
                 style={{ background: tab === t ? "var(--panel-3)" : "var(--panel)", color: tab === t ? "var(--accent)" : "var(--text-2)" }}>
-                {t === "intel" ? "Intelligence" : t === "framing" ? "Source framing" : t === "timeline" ? "Timeline" : `Coverage (${story.articles.length})`}
+                {t === "intel" ? "Intelligence" : t === "framing" ? "Source framing" : t === "timeline" ? "Timeline" : t === "evidence" ? "Dossier" : `Coverage (${story.articles.length})`}
               </button>
             ))}
           </div>
@@ -221,6 +246,90 @@ export default function StoryPage() {
                   <span className="dim" style={{ fontSize: 12 }}>↗</span>
                 </a>
               ))}
+            </div>
+          )}
+
+          {tab === "evidence" && (
+            <div style={{ display: "grid", gap: 16 }}>
+              {/* Living story + timeline */}
+              <div className="card pad">
+                <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 10 }}>
+                  Living story {evidence?.living_story ? `(v${evidence.living_story.version})` : ""}
+                </div>
+                {evidence?.living_story ? (
+                  <p style={{ margin: 0, lineHeight: 1.65, fontSize: 14.5 }}>{evidence.living_story.current_summary}</p>
+                ) : (
+                  <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>The living story appears after the first podcast is generated — it evolves with each new article.</p>
+                )}
+                {evidence?.living_story && (
+                  <div className="mono dim" style={{ fontSize: 11.5, marginTop: 8 }}>
+                    {evidence.living_story.timeline.length} events in timeline · last fused {timeAgo(evidence.living_story.last_fused_at)}
+                  </div>
+                )}
+              </div>
+
+              {/* Verified claims */}
+              <div className="card pad">
+                <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 12 }}>
+                  Verified claims ({evidence?.facts.length ?? 0})
+                </div>
+                {evidence && evidence.facts.length > 0 ? (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {evidence.facts.map((f) => (
+                      <div key={f.id} style={{ padding: "12px 14px", background: "var(--panel-2)", borderRadius: 10, borderLeft: `3px solid ${f.status === "confirmed" ? "var(--good)" : f.status === "reported" ? "var(--warm)" : "var(--bad)"}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13.5, flex: 1 }}>{f.claim}</div>
+                          <span className={`chip ${f.status === "confirmed" ? "good" : f.status === "reported" ? "warm" : "trend"}`} style={{ flexShrink: 0 }}>
+                            {f.status} {(f.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--text-2)", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                          <span>{f.support_count} sources</span>
+                          <span className="dim">originals: {f.canonical_origins.length > 0 ? f.canonical_origins.join(", ") : "none — syndicated"}</span>
+                          {f.contradicted_by && <span className="chip trend">⚠ contradicted</span>}
+                        </div>
+                        <details style={{ marginTop: 8 }}>
+                          <summary className="mono dim" style={{ fontSize: 11.5, cursor: "pointer" }}>attestations ({f.attestation_json.length})</summary>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                            {f.attestation_json.map((a, i) => (
+                              <a key={i} href={a.url} target="_blank" rel="noreferrer" className="chip src" style={{ textDecoration: a.original ? "none" : "line-through" }} title={a.original ? "Original reporting" : "Syndicated copy"}>
+                                {a.source} {a.original && <span title="Original">★</span>}
+                              </a>
+                            ))}
+                          </div>
+                        </details>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Run a podcast on this story to extract claim-level evidence.</p>
+                )}
+              </div>
+
+              {/* Contradictions */}
+              {evidence && evidence.contradictions.length > 0 && (
+                <div className="card pad" style={{ borderLeft: "3px solid var(--bad)" }}>
+                  <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--bad)", fontWeight: 600, marginBottom: 10 }}>Contradictions detected</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.75, fontSize: 13.5 }}>
+                    {evidence.contradictions.map((c, i) => <li key={i}>{c.claim}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {/* Evolving timeline from living story */}
+              {evidence?.living_story && evidence.living_story.timeline.length > 0 && (
+                <div className="card pad">
+                  <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 12 }}>Evolving timeline</div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {evidence.living_story.timeline.slice(-12).reverse().map((e, i) => (
+                      <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 12, fontSize: 13 }}>
+                        <div className="mono dim" style={{ fontSize: 11.5 }}>{e.t}</div>
+                        <div>{e.event}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>

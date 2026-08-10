@@ -10,6 +10,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     ...ep,
     script: ep.script ? JSON.parse(ep.script as string) : null,
     evaluation: ep.evaluation ? JSON.parse(ep.evaluation as string) : null,
+    storyboard: ep.storyboard ? JSON.parse(ep.storyboard as string) : null,
     generation_cache: undefined,
   });
 }

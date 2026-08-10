@@ -142,9 +142,9 @@ async function retryTTS(text: string, voice: string, language: "en" | "ar", atte
     }
     // Rate limit: honor the retry window (parse "try again in Xs" / "XmYs")
     const rl = msg.match(/try again in (?:(\d+)m)?\s*(?:([\d.]+)s)?/i);
-    if (/rate limit|429|tokens per day/i.test(msg) && attempt < 6) {
-      let wait = 20000;
-      if (rl) wait = Math.min(90_000, (parseInt(rl[1] ?? "0") * 60 + parseFloat(rl[2] ?? "20")) * 1000 + 1500);
+    if (/rate limit|429|tokens per day/i.test(msg) && attempt < 14) {
+      let wait = 20_000;
+      if (rl) wait = Math.min(5 * 60_000, (parseInt(rl[1] ?? "0") * 60 + parseFloat(rl[2] ?? "20")) * 1000 + 1500);
       await new Promise((r) => setTimeout(r, wait));
       return retryTTS(text, voice, language, attempt + 1);
     }

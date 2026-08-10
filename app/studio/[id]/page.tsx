@@ -12,6 +12,8 @@ interface Episode {
   id: string; cluster_id: string; title: string; format: string; language: "en" | "ar"; status: string; progress: number; stage_label: string;
   error: string | null; script: Script | null; audio_path: string | null; audio_duration: number | null; evaluation: Evaluation | null;
   created_at: number; script_model: string | null; play_count: number;
+  video_status: string | null; video_path: string | null; video_duration: number | null; video_error: string | null;
+  storyboard: { beats: { index: number; image_prompt: string; caption: string; duration: number; frame_path?: string }[]; total_duration: number } | null;
 }
 
 const DIRECTIONS = ["", "cheerful", "warm", "casual", "serious", "thoughtful", "curious", "professionally", "authoritatively", "excited", "urgent", "somber", "deadpan", "whisper"];
@@ -23,7 +25,8 @@ export default function StudioPage() {
   const [draft, setDraft] = useState<Script | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"script" | "listen" | "review">("script");
+  const [tab, setTab] = useState<"script" | "listen" | "watch" | "review">("script");
+  const [videoBusy, setVideoBusy] = useState(false);
 
   const load = async () => {
     const j = await api<Episode>(`/api/episodes/${id}`);
@@ -35,6 +38,19 @@ export default function StudioPage() {
   const live = episodeProgress[id];
   const running = ep && !["ready", "failed", "script_ready", "draft"].includes(ep.status);
   useInterval(() => { if (running) void load(); }, running ? 2500 : null);
+  // poll while the detached video worker renders
+  const videoRunning = ep && (ep.video_status === "queued" || ep.video_status === "storyboard" || ep.video_status === "rendering");
+  useInterval(() => { if (videoRunning) void load(); }, videoRunning ? 3000 : null);
+
+  const renderVideo = async () => {
+    setVideoBusy(true);
+    try {
+      await api(`/api/episodes/${id}/video`, { method: "POST" });
+      pushToast("Video render queued — frames on your local Z-Image, then ffmpeg stitch", "good");
+      await load();
+    } catch (e) { pushToast(`${e}`, "bad"); }
+    setVideoBusy(false);
+  };
 
   const stageIndex = useMemo(() => {
     const s = ep?.status ?? "queued";
@@ -155,10 +171,10 @@ export default function StudioPage() {
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-        {(["script", "listen", "review"] as const).map((t) => (
+        {(["script", "listen", "watch", "review"] as const).map((t) => (
           <button key={t} className="btn sm" onClick={() => setTab(t)}
             style={{ background: tab === t ? "var(--panel-3)" : "var(--panel)", color: tab === t ? "var(--accent)" : "var(--text-2)" }}>
-            {t === "script" ? `Script${draft ? ` (${draft.segments.length})` : ""}` : t === "listen" ? "Listen" : "Quality review"}
+            {t === "script" ? `Script${draft ? ` (${draft.segments.length})` : ""}` : t === "listen" ? "Listen" : t === "watch" ? "Watch" : "Quality review"}
           </button>
         ))}
       </div>
@@ -237,6 +253,75 @@ export default function StudioPage() {
             <div className="card pad" style={{ textAlign: "center", padding: 50 }}>
               <div style={{ fontSize: 40, marginBottom: 10 }}>🎧</div>
               <div className="muted">No audio yet — synthesize from the script stage.</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "watch" && (
+        <div style={{ maxWidth: 860 }}>
+          {ep.video_path ? (
+            <>
+              <div className="card pad" style={{ padding: 8, background: "black" }}>
+                <video key={ep.video_path} controls playsInline preload="metadata" style={{ width: "100%", borderRadius: 10, display: "block" }} src={`${ep.video_path}?v=${ep.video_duration ?? Date.now()}`} />
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, fontSize: 13 }} className="muted">
+                <span className="chip good">✓ video ready</span>
+                {ep.video_duration ? <span>{fmtDuration(ep.video_duration)}</span> : null}
+                {ep.storyboard ? <span>{ep.storyboard.beats.length} beats · Z-Image-Turbo 1280×720</span> : null}
+                <button className={`btn sm ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy} style={{ marginLeft: "auto" }}>Re-render</button>
+              </div>
+              {ep.storyboard && (
+                <div className="card pad" style={{ marginTop: 14 }}>
+                  <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 10 }}>Storyboard — how the video looks</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10 }}>
+                    {ep.storyboard.beats.map((b) => (
+                      <details key={b.index} style={{ background: "var(--panel-2)", borderRadius: 10, padding: 8 }}>
+                        <summary style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: "var(--accent)" }}>
+                          {String(b.index + 1).padStart(2, "0")} · {b.caption || `Beat ${b.index + 1}`}
+                        </summary>
+                        <p className="muted" style={{ fontSize: 11.5, lineHeight: 1.5, margin: "8px 0 0" }}>{b.image_prompt}</p>
+                        <div className="mono dim" style={{ fontSize: 10.5, marginTop: 6 }}>{b.duration}s on screen</div>
+                      </details>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : videoRunning ? (
+            <div className="card pad" style={{ textAlign: "center", padding: 50 }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🎬</div>
+              <div className="muted" style={{ marginBottom: 12 }}>
+                {ep.video_status === "queued" ? "Queued — worker starting…" : ep.video_status === "storyboard" ? "Designing storyboard…" : "Rendering frames on your local Z-Image + stitching with ffmpeg…"}
+              </div>
+              <div className="progress-track" style={{ height: 8, maxWidth: 420, margin: "0 auto" }}>
+                <div className="progress-fill" style={{ width: ep.video_status === "storyboard" ? "18%" : ep.video_status === "rendering" ? "60%" : "6%" }} />
+              </div>
+            </div>
+          ) : ep.video_status === "failed" ? (
+            <div className="card pad" style={{ textAlign: "center", padding: 50 }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🎞</div>
+              <div className="muted" style={{ marginBottom: 8 }}>Video render failed.</div>
+              <div className="mono dim" style={{ fontSize: 12, marginBottom: 14, maxWidth: 560, marginInline: "auto", wordBreak: "break-word" }}>{ep.video_error}</div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                <button className={`btn sm ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy}>Try again</button>
+                <a className="btn sm" href={`/api/episodes/${id}/video`} target="_blank" rel="noreferrer">raw status</a>
+              </div>
+              {String(ep.video_error ?? "").includes("ComfyUI") && (
+                <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>Start your local ComfyUI server (the one with <code>Z-image.json</code>, port 8188) and press Try again.</p>
+              )}
+            </div>
+          ) : (
+            <div className="card pad" style={{ textAlign: "center", padding: 50 }}>
+              <div style={{ fontSize: 40, marginBottom: 10 }}>🎥</div>
+              <div className="muted" style={{ marginBottom: 14 }}>
+                {ep.audio_path
+                  ? "Turn this episode into a narrated video: storyboard beats on the frontier model, frames from your local Z-Image-Turbo (ComfyUI :8188), ffmpeg stitch with captions + Ken Burns motion."
+                  : "Synthesize the audio first — the video uses the narration as its master clock."}
+              </div>
+              {ep.audio_path && (
+                <button className={`btn primary ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy}>Render video</button>
+              )}
             </div>
           )}
         </div>
