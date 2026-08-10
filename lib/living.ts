@@ -1,6 +1,9 @@
 /**
  * Living story: evolve a cluster's fused summary + timeline as new articles arrive.
  * Idempotent: re-running on the same articles is a no-op; new articles trigger a fusion pass.
+ *
+ * Also produces the editorial — the "how each outlet is framing this" briefing that
+ * feeds AI bias/narrative analysis downstream.
  */
 import { getDb } from "./db";
 import { chatJson, LLM_MODELS } from "./chat";
@@ -103,6 +106,49 @@ Return JSON: {"summary":"…8-12 sentence integrated story…","timeline":[{"t":
       timeline=excluded.timeline,
       last_fused_at=excluded.last_fused_at
   `).run(clusterId, data.summary, now, version, JSON.stringify(timeline), lastArticleTs);
+
+// after story fusion: narrative-analysis write-up per cluster (editorial table)
+  try {
+    const per_src = articles.map((a) => {
+      const lean = (db.prepare("SELECT lean FROM sources WHERE id=(SELECT source_id FROM articles WHERE id=?)").get(a.id) as { lean: string } | undefined)?.lean ?? "center";
+      return `${a.source_name} (${lean})`;
+    }).join(", ");
+    const { data: ed } = await chatJson<{
+      bias_json: { source: string; tone: string; vocabulary: string[]; emphasis: string[]; omits: string }[];
+      whats_solid: string[];
+      whats_contested: string;
+      whats_unknown: string;
+    }>({
+      model: LLM_MODELS.frontier,
+      system:
+        "You are the standards desk at NEWSCAST AI. Compare how each outlet covers the same story. Output JSON: bias_json[{source,tone,vocabulary[3-5 charged/favored words],emphasis[2-4 preferfaced facts],omits}], whats_solid (consensus claims all sources agree on, 1-3), whats_contested (the contested claim and who disputes it), whats_unknown (what none of the sources are saying). Use only the actual articles you see; do not invent omissions.",
+      user: `Stands: ${data.summary}\n\nSOURCES: ${per_src}\n\nARTICLES:\n${recentArticles.map((a) => `[${a.source_name}] ${a.title}\n${(a.content || a.summary || "").slice(0, 500)}`).join("\n\n---\n\n")}`,
+      jsonObject: true,
+      maxTokens: 3500,
+      temperature: 0.35,
+      task: "editorial_analysis",
+    });
+    const edRaw = ed as typeof ed & { whats_solid: unknown; whats_contested: unknown; whats_unknown: unknown };
+    const toJson = (v: unknown, fallback: string | string[]) =>
+      typeof v === "string" ? v : JSON.stringify(v ?? fallback);
+    db.prepare(`
+      INSERT INTO editorials (cluster_id, bias_json, whats_solid, whats_contested, whats_unknown, updated_at)
+      VALUES (?,?,?,?,?,?)
+      ON CONFLICT(cluster_id) DO UPDATE SET
+        bias_json=excluded.bias_json, whats_solid=excluded.whats_solid,
+        whats_contested=excluded.whats_contested, whats_unknown=excluded.whats_unknown,
+        updated_at=excluded.updated_at
+    `).run(
+      clusterId,
+      JSON.stringify(ed.bias_json ?? []),
+      toJson(edRaw.whats_solid, []),
+      toJson(edRaw.whats_contested, "(none contested in coverage)"),
+      toJson(edRaw.whats_unknown, "(no gaps listed)"),
+      now
+    );
+  } catch (e) {
+    console.error("editorial write-up skipped:", e);
+  }
 
   return {
     cluster_id: clusterId,

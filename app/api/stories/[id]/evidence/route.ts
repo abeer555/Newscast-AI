@@ -30,7 +30,22 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       contradicts: f.contradicted_by,
     })),
     living_story: living ? { ...living, timeline: JSON.parse(living.timeline as string) } : null,
-    editorial: editorial ? { ...editorial, bias_json: JSON.parse(editorial.bias_json as string) } : null,
+    editorial: editorial ? (() => {
+      const parseMaybe = (raw: unknown) => {
+        if (typeof raw !== "string") return raw;
+        if (raw.startsWith("[") || raw.startsWith("{")) {
+          try { return JSON.parse(raw); } catch { return raw; }
+        }
+        return raw;
+      };
+      return {
+        bias_json: JSON.parse(editorial.bias_json as string),
+        whats_solid: parseMaybe(editorial.whats_solid),
+        whats_contested: parseMaybe(editorial.whats_contested),
+        whats_unknown: parseMaybe(editorial.whats_unknown),
+        updated_at: editorial.updated_at,
+      };
+    })() : null,
     episodes,
     gates,
   });

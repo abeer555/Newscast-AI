@@ -330,8 +330,36 @@ async function renderVideoForEpisode(
   // 1. how should the video look
   emit(episodeId, "rendering_video", 0.80, "Designing storyboard");
   setEpisode(episodeId, { video_status: "storyboard" });
-  const board: Storyboard = await planStoryboard(script, intel as StoryIntelligence | null);
-  setEpisode(episodeId, { storyboard: JSON.stringify(board) });
+  const board: Storyboard = await planStoryboard(script, intel);
+  const epCluster = (db.prepare("SELECT cluster_id FROM episodes WHERE id=?").get(episodeId) as { cluster_id: string }).cluster_id;
+
+  // ─── evidence-aware visual plan ────────────────────────────────────────
+  // Attach each beat to claims, rewrite the prompt so the visual matches
+  // the evidence shape (map/data/sourced/archival for non-narrative beats).
+  const facts = db.prepare("SELECT * FROM cluster_facts WHERE cluster_id=?").all(epCluster) as VerifiedFact[];
+  let visualPlan: VisualPlan | null = null;
+  if (facts.length) {
+    try {
+      visualPlan = await planEvidenceVisuals({ beats: board.beats, segments: script.segments, facts, intel });
+      logEvent("pipeline", `Visual plan for ${episodeId}: ${visualPlan.beats.map((b) => b.mode).join("/")}`);
+      // Overlay planner's prompt back onto the storyboard beats — match by INDEX even
+      // if the model 1-indexes its return (common LLM quirk).
+      const n = board.beats.length;
+      const beatsAreOneIndexed = visualPlan.beats.length > 0 && visualPlan.beats.every((b) => b.beat_index >= 1 && b.beat_index <= n);
+      const shift = beatsAreOneIndexed ? 1 : 0;
+      for (const pv of visualPlan.beats) {
+        const idx = Math.max(0, Math.min(n - 1, pv.beat_index - shift));
+        if (board.beats[idx] && idx >= 0) {
+          board.beats[idx].image_prompt = pv.prompt;
+          (board.beats[idx] as Beat & { mode?: string; fact_ids?: string[] }).mode = pv.mode;
+          (board.beats[idx] as Beat & { fact_ids?: string[] }).fact_ids = pv.fact_ids;
+        }
+      }
+      setEpisode(episodeId, { storyboard: JSON.stringify(board) });
+    } catch (e) {
+      logEvent("error", `Visual plan failed: ${String(e)}`);
+    }
+  }
   logEvent("pipeline", `Storyboard: ${board.beats.length} beats / ${board.total_duration}s for ${episodeId}`);
 
   // 2. one frame per beat, sequential so the local GPU queue stays shallow

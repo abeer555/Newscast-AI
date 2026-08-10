@@ -73,7 +73,8 @@ Rewrite each beat's image_prompt so the style matches the chosen mode. Mode-spec
 - sourced: ${MODE_HINTS.sourced}
 - archival: ${MODE_HINTS.archival}
 
-Output JSON: {"beats":[{"beat_index":0,"mode":"generated","prompt":"...","rationale":"...","fact_ids":["id1"]}], "default_mode":"generated"}`,
+Output JSON: {"beats":[{"beat_index":0,"mode":"generated","prompt":"...","rationale":"...","fact_ids":["id1"]}], "default_mode":"generated"}
+The beat_index values must be exactly 0..N-1 (NOT 1-based) in the same order as the input list. Do not reorder or skip.`,
     user: `STORY: ${args.intel?.headline ?? ""}
 
 BEATS WITH CAPTIONS:

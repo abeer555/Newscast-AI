@@ -46,7 +46,7 @@ if (!living) {
   console.log("→ fuse living story");
   living = await fuseStory(ep.cluster_id as string);
 }
-console.log(`· living story v${living.version}`);
+console.log(`· living story v${(living as { version: number } | null)?.version ?? "-"}`);
 
 // 3. plan evidence-aware visuals using existing storyboard if any
 const board = ep.storyboard ? JSON.parse(ep.storyboard as string) : { beats: [] };
