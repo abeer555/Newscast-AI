@@ -23,7 +23,20 @@ export const NEWS_SOURCES: NewsSource[] = [
   { id: "npr", name: "NPR", url: "https://feeds.npr.org/1001/rss.xml", language: "en", lean: "center-left", country: "us" },
   { id: "sky", name: "Sky News", url: "https://feeds.skynews.com/feeds/rss/world.xml", language: "en", lean: "center", country: "uk" },
   { id: "cnbc", name: "CNBC", url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", language: "en", lean: "center-right", country: "us" },
+  // India — independent desks across print, TV, wire
+  { id: "hindu", name: "The Hindu", url: "https://www.thehindu.com/news/national/feeder/default.rss", language: "en", lean: "center-left", country: "in" },
+  { id: "toi", name: "Times of India", url: "https://timesofindia.indiatimes.com/rssfeeds/1898055.cms", language: "en", lean: "center-right", country: "in" },
+  { id: "ndtv", name: "NDTV", url: "https://feeds.feedburner.com/NDTV-LatestNews", language: "en", lean: "center", country: "in" },
+  { id: "hindustan", name: "Hindustan Times", url: "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml", language: "en", lean: "center", country: "in" },
+  { id: "news18", name: "News18", url: "https://www.news18.com/rss/india.xml", language: "en", lean: "center-right", country: "in" },
+  { id: "theprint", name: "ThePrint", url: "https://theprint.in/feed/", language: "en", lean: "center-left", country: "in" },
+  { id: "scroll", name: "Scroll.in", url: "https://feeds.feedburner.com/scrollin", language: "en", lean: "center-left", country: "in" },
+  { id: "indiatoday", name: "India Today", url: "https://www.indiatoday.in/rss/1206514", language: "en", lean: "center", country: "in" },
+  { id: "firstpost", name: "Firstpost", url: "https://www.firstpost.com/rss/india.xml", language: "en", lean: "center-right", country: "in" },
+  { id: "thewire", name: "The Wire", url: "https://thewire.in/feed", language: "en", lean: "center-left", country: "in" },
 ];
+
+export const INDIA_SOURCE_IDS = new Set(["hindu", "toi", "ndtv", "hindustan", "news18", "theprint", "scroll", "indiatoday", "firstpost", "thewire"]);
 
 export const VOICES = {
   en: [

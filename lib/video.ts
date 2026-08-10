@@ -85,32 +85,35 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
   opts.onProgress?.(0.55, "Building Ken Burns clips");
 
   // --- pass 1: per-beat zoom clip
+  // Anti-jitter fix:
+  //  · crop 16:9 so no letterboxing inside zoompan
+  //  · oversized canvas (6400x3600) so zoompan's integer x/y rounding error is ~4 wide-pixels
+  //    at output time (vs ~1 at native 1280x720)
+  //  · scale down ONCE at the end — never multiple zoompan windows
   const clipPaths: string[] = [];
   for (let i = 0; i < n; i++) {
     const out = path.join(framesDir, `clip_${String(i).padStart(3, "0")}.mp4`);
     const frames = Math.max(8, Math.ceil(frameDur[i] * FPS));
-    // Keep input at native AR (crop-to-16:9 then resize) and let zoompan handle the big-res
-    // resample + window internally. Expression uses `on` (output frame number) so the zoom
-    // is deterministic — using `zoom` in the expression self-references and stalls.
-    const Z0 = 1.0, Z1 = 1.22;
-    const dir = i % 2 === 0 ? 1 : -1; // alternate zoom-in / zoom-out
-    const zExpr = `'${Z0}+(${Z1 - Z0})*on/${frames}'`;
-    const zoom = dir > 0 ? `z=${zExpr}` : `z='${Z1}+(${Z0 - Z1})*on/${frames}'`;
+    const Z0 = 1.0, Z1 = 1.20; // modest — read clearly over the beat without wobble
+    const dir = i % 2 === 0 ? 1 : -1;
+    const viaIn = `zoompan=z='${Z0}+(${Z1 - Z0})*on/${frames}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=${frames}:s=6400x3600:fps=${FPS}`;
+    const viaOut = `zoompan=z='${Z1}+(${Z0 - Z1})*on/${frames}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=${frames}:s=6400x3600:fps=${FPS}`;
+    const zoom = dir > 0 ? viaIn : viaOut;
     await run("ffmpeg", [
       "-y",
       "-loop", "1",
+      "-framerate", String(FPS),
       "-i", opts.frames[i],
       "-vf",
       [
-        // crop the source frame to 16:9 first so zoompan never letterboxes
         "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)'",
-        // zoompan handles resolution internally; scaling up just wastes CPU
-        `zoompan=${zoom}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${W}x${H}:fps=${FPS}`,
+        zoom,
+        // scale down once — lanczos at output for clean aa after the oversized window
+        `scale=${W}:${H}:flags=lanczos:eval=init`,
         "format=yuv420p",
         "setsar=1",
       ].join(","),
       "-frames:v", String(frames),
-      "-r", String(FPS),
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
       out,
     ], { timeout: 300_000 });

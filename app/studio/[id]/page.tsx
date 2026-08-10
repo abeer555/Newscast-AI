@@ -7,7 +7,25 @@ import AudioPlayer from "@/components/AudioPlayer";
 
 interface Segment { index: number; speaker: string; voice: string; direction: string; text: string; }
 interface Script { title: string; description: string; tags: string[]; hosts: { name: string; role: string; voice: string }[]; segments: Segment[]; estimated_seconds: number; }
-interface Evaluation { scores: Record<string, number>; overall: number; verdict: string; strengths: string[]; improvements: string[]; fact_check_notes: string; summary: string; }
+interface Evaluation {
+  // legacy shape (older episodes)
+  scores?: Record<string, number>;
+  overall?: number;
+  verdict?: string;
+  strengths?: string[];
+  improvements?: string[];
+  fact_check_notes?: string;
+  summary?: string;
+  // new shape (evidence pipeline)
+  publish_confidence?: number;
+  decision?: "publish" | "needs_review";
+  reasons?: string[];
+  syndication_handling?: number;
+  contradiction_disclosure?: number;
+  subtitle_sync?: number;
+  visual_relevance?: number;
+  audio_quality?: number;
+}
 interface Episode {
   id: string; cluster_id: string; title: string; format: string; language: "en" | "ar"; status: string; progress: number; stage_label: string;
   error: string | null; script: Script | null; audio_path: string | null; audio_duration: number | null; evaluation: Evaluation | null;
@@ -331,15 +349,20 @@ export default function StudioPage() {
         <div style={{ maxWidth: 860 }}>
           {ep.evaluation ? (
             <div className="grid">
+              {/* header card — publish confidence + decision chip */}
               <div className="card pad" style={{ display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ textAlign: "center" }}>
-                  <div style={{ fontFamily: "var(--font-display)", fontSize: 46, fontWeight: 800, color: ep.evaluation.overall >= 80 ? "var(--good)" : ep.evaluation.overall >= 65 ? "var(--warm)" : "var(--bad)" }}>
-                    {ep.evaluation.overall}
+                  <div style={{ fontFamily: "var(--font-display)", fontSize: 46, fontWeight: 800, color: (ep.evaluation.publish_confidence ?? ((ep.evaluation.overall ?? 0) / 100)) >= 0.72 ? "var(--good)" : (ep.evaluation.publish_confidence ?? 0) >= 0.55 ? "var(--warm)" : "var(--bad)" }}>
+                    {ep.evaluation.publish_confidence
+                      ? `${Math.round((ep.evaluation.publish_confidence as number) * 100)}%`
+                      : ep.evaluation.overall}
                   </div>
-                  <div className="chip good" style={{ marginTop: 4 }}>{ep.evaluation.verdict.replace("_", " ")}</div>
+                  <div className={`chip ${((ep.evaluation.publish_confidence ?? ((ep.evaluation.overall ?? 0) / 100)) >= 0.72) ? "good" : "warm"}`} style={{ marginTop: 4 }}>
+                    {(ep.evaluation.decision ?? (ep.evaluation.verdict ?? "review")).replace(/_/g, " ")}
+                  </div>
                 </div>
                 <div style={{ flex: 1, minWidth: 260 }}>
-                  {Object.entries(ep.evaluation.scores).map(([k, v]) => (
+                  {Object.entries(ep.evaluation.scores ?? {}).map(([k, v]) => (
                     <div key={k} style={{ marginBottom: 9 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                         <span className="muted" style={{ textTransform: "capitalize" }}>{k}</span><span className="mono">{v}</span>
@@ -349,17 +372,19 @@ export default function StudioPage() {
                   ))}
                 </div>
               </div>
-              <div className="card pad"><div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 8 }}>Editor's note</div><p style={{ margin: 0, lineHeight: 1.65 }}>{ep.evaluation.summary}</p></div>
-              <div className="grid c2">
-                <div className="card pad" style={{ borderLeft: "3px solid var(--good)" }}>
-                  <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--good)", fontWeight: 600, marginBottom: 8 }}>Strengths</div>
-                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.75, fontSize: 13.5 }}>{ep.evaluation.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              <div className="card pad"><div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 8 }}>Editor's note / fact check</div><p style={{ margin: 0, lineHeight: 1.65 }}>{ep.evaluation.summary ?? ep.evaluation.fact_check_notes}</p></div>
+              {(ep.evaluation.reasons?.length ?? ep.evaluation.strengths?.length ?? 0) > 0 && (
+                <div className="grid c2">
+                  <div className="card pad" style={{ borderLeft: "3px solid var(--good)" }}>
+                    <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--good)", fontWeight: 600, marginBottom: 8 }}>Strengths / verdict reasoning</div>
+                    <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.75, fontSize: 13.5 }}>{(ep.evaluation.reasons ?? ep.evaluation.strengths ?? []).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                  </div>
+                  <div className="card pad" style={{ borderLeft: "3px solid var(--warm)" }}>
+                    <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--warm)", fontWeight: 600, marginBottom: 8 }}>Improve</div>
+                    <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.75, fontSize: 13.5 }}>{(ep.evaluation.improvements ?? []).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                  </div>
                 </div>
-                <div className="card pad" style={{ borderLeft: "3px solid var(--warm)" }}>
-                  <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--warm)", fontWeight: 600, marginBottom: 8 }}>Improve</div>
-                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.75, fontSize: 13.5 }}>{ep.evaluation.improvements.map((s, i) => <li key={i}>{s}</li>)}</ul>
-                </div>
-              </div>
+              )}
               <div className="card pad"><div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 8 }}>Fact-check</div><p style={{ margin: 0, lineHeight: 1.65 }} className="muted">{ep.evaluation.fact_check_notes}</p></div>
             </div>
           ) : (

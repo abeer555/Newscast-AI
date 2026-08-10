@@ -198,13 +198,12 @@ function migrate(db: Database.Database) {
 import { NEWS_SOURCES } from "./sources";
 
 function seedSources(db: Database.Database) {
-  const count = (db.prepare("SELECT COUNT(*) c FROM sources").get() as { c: number }).c;
-  if (count > 0) return;
-  const insert = db.prepare(
-    "INSERT INTO sources (id, name, url, language, lean, country, enabled) VALUES (?,?,?,?,?,?,1)"
+  // Upsert so newly added feeds land even after initial provisioning.
+  const ins = db.prepare(
+    "INSERT OR IGNORE INTO sources (id, name, url, language, lean, country, enabled) VALUES (?,?,?,?,?,?,1)"
   );
   const tx = db.transaction(() => {
-    for (const s of NEWS_SOURCES) insert.run(s.id, s.name, s.url, s.language, s.lean, s.country);
+    for (const s of NEWS_SOURCES) ins.run(s.id, s.name, s.url, s.language, s.lean, s.country);
   });
   tx();
 }

@@ -7,6 +7,7 @@ import { useStore } from "@/lib/store";
 const NAV = [
   { href: "/", label: "Command Deck", icon: NewsIcon },
   { href: "/trending", label: "Trending", icon: FlameIcon },
+  { href: "/india", label: "India", icon: LotusIcon },
   { href: "/library", label: "Podcast Library", icon: WavesIcon },
   { href: "/studio", label: "Studio", icon: MicIcon },
   { href: "/analytics", label: "Analytics", icon: ChartIcon },
@@ -84,6 +85,7 @@ function Toasts() {
 /* inline icons */
 function NewsIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M4 5h13v14H4z"/><path d="M17 8h3v11a0 0 0 0 1 0 0h-3"/><path d="M7 9h7M7 13h7M7 17h4"/></svg>; }
 function FlameIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M12 3s5 4.5 5 9.5A5 5 0 0 1 7 12.5C7 7.5 12 3 12 3z"/><path d="M12 12a2.5 2.5 0 0 0-2.5 2.5A2.5 2.5 0 0 0 12 17a2.5 2.5 0 0 0 2.5-2.5A2.5 2.5 0 0 0 12 12z"/></svg>; }
+function LotusIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M12 3c-.6 3-2 5.2-3.5 7 2-.8 3.4-1 4-1s2 .2 4 1C15 8.2 13.6 6 13 3h-1z"/><path d="M4 21c2-.5 4-2 5.5-4M20 21c-2-.5-4-2-5.5-4M4 21c4.5-.5 8-3 8-7 0 4 3.5 6.5 8 7"/></svg>; }
 function WavesIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M4 12h2M8 8v8M12 5v14M16 9v6M20 12h0"/></svg>; }
 function MicIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>; }
 function ChartIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/></svg>; }
