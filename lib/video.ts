@@ -59,11 +59,14 @@ export interface RenderOpts {
   audioPath: string; // absolute path to episode wav
   audioDuration: number;
   script: PodcastScript;
+  isReel?: boolean; // if true, render 1080x1920 vertical for social reels
   onProgress?: (pct: number, label: string) => void;
 }
 
 export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: string; publicPath: string; durationSec: number }> {
-  const W = 1280, H = 720, FPS = 24;
+  const W = opts.isReel ? 1080 : 1280;
+  const H = opts.isReel ? 1920 : 720;
+  const FPS = 24;
   const framesDir = path.join(VIDEO_DIR, "tmp", opts.episodeId);
   // fresh workspace (stale xfade intermediates caused pinned first-beat bugs in the past)
   try { fs.rmSync(framesDir, { recursive: true, force: true }); } catch { /* first run */ }
@@ -102,9 +105,11 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
       "-i", opts.frames[i],
       "-vf",
       [
-        // crop 16:9 then big upscale — zoompan gets a dense grid so integer hops are sub-pixel
-        "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)'",
-        "scale=5120:2880:flags=lanczos",
+        // For reels (portrait), crop 9:16 centre; for landscape crop 16:9
+        opts.isReel
+          ? "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)'"
+          : "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)'",
+        opts.isReel ? "scale=4320:7680:flags=lanczos" : "scale=5120:2880:flags=lanczos",
         `zoompan=z='${zExpr}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s=${W}x${H}:fps=${FPS}`,
         "format=yuv420p",
         "setsar=1",

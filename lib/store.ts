@@ -35,7 +35,7 @@ export const store = {
   appendLog(line: string) { set({ ingestLog: [line, ...state.ingestLog].slice(0, 40) }); },
   updateEpisodeProgress(p: EpisodeProgress) { set({ episodeProgress: { ...state.episodeProgress, [p.episodeId]: p } }); },
   trackApiStart(id: string, url: string) {
-    set({ apiRequests: [{ id, url, status: "pending", ts: Date.now() }, ...state.apiRequests].slice(0, 100) });
+    set({ apiRequests: [{ id, url, status: "pending", ts: Date.now() } as const, ...state.apiRequests.filter(r => r.id !== id)].slice(0, 100) });
   },
   trackApiEnd(id: string, status: "resolved" | "error") {
     set({

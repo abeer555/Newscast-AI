@@ -51,9 +51,36 @@ export default function SettingsPage() {
         <div className="card pad">
           <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 12 }}>Default voice</div>
           <select className="btn" style={{ width: "100%", background: "var(--panel-2)" }} value={voice} onChange={(e) => setVoice(e.target.value)}>
-            {["af_heart", "af_bella", "af_nicole", "af_sarah", "am_adam", "am_michael"].map((v) => (
-              <option key={v} value={v}>{v}</option>
-            ))}
+            <optgroup label="English">
+              {["af_heart", "af_bella", "af_nicole", "af_sarah", "am_adam", "am_michael"].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Hindi / हिन्दी">
+              {["hf_alpha", "hm_omega"].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Spanish / Español">
+              {["ef_dora", "em_alex"].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </optgroup>
+            <optgroup label="French / Français">
+              {["ff_siwis"].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Portuguese / Português">
+              {["pf_dora", "pm_alex"].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Chinese / 中文">
+              {["zf_xiaobei", "zm_yunxi"].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </optgroup>
           </select>
         </div>
       </div>

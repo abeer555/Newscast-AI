@@ -1,4 +1,6 @@
 .env
+kokoro/
+public/
 node_modules/
 .next/
 data/

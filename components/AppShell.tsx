@@ -39,7 +39,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         if (e.status === "pending") {
           useStore.getState().trackApiStart(e.id, e.name);
         } else {
-          useStore.getState().trackApiEnd(e.id, e.status, e.ms);
+          useStore.getState().trackApiEnd(e.id, e.status);
         }
       });
       return () => es.close();

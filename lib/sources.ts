@@ -53,12 +53,18 @@ export const VOICES = {
   ar: [] as { id: string; name: string; gender: string }[],
 } as const;
 
+import { ScriptLanguage } from "./scriptgen";
+
 // "kokoro" is a local-only sentinel — the actual model is the kokoro_server.py process.
 // The value is used for analytics logging only; no cloud API is called.
-export const TTS_MODELS = {
+export const TTS_MODELS: Record<ScriptLanguage, string | null> = {
   en: "kokoro/af_heart",
-  ar: null,   // no TTS for Arabic
-} as const;
+  hi: "kokoro/hf_alpha",
+  es: "kokoro/ef_dora",
+  fr: "kokoro/ff_siwis",
+  pt: "kokoro/pf_dora",
+  zh: "kokoro/zf_xiaobei",
+};
 
 export const LLM = {
   structured: "openai/gpt-oss-120b", // strict json_schema supported

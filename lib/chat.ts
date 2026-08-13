@@ -1,16 +1,17 @@
 import OpenAI from "openai";
+import { GoogleGenAI, Type } from "@google/genai";
 import crypto from "crypto";
 import { getDb } from "./db";
 import { trackModelApi } from "./bus";
 
-/** Multi-provider LLM router — NVIDIA NIM heavy models for reasoning, Groq for TTS voices. */
+/** Multi-provider LLM router — Google Gemini for reasoning, Groq for fast fallback. */
 
 export const LLM_MODELS = {
-  // frontier: "nvidia/nemotron-3-ultra-550b-a55b",
-  frontier: "nvidia/nemotron-3-super-120b-a12b",
-  heavy: "nvidia/nemotron-3-super-120b-a12b",
+  frontier: "gemini-3.1-pro-preview",
+  heavy: "gemini-3.1-pro-preview",
   groqStructured: "openai/gpt-oss-120b",
   groqGeneral: "llama-3.3-70b-versatile",
+  nvidiaFallback: "nvidia/nemotron-3-super-120b-a12b",
 } as const;
 
 export interface ChatCallOpts {
@@ -23,18 +24,24 @@ export interface ChatCallOpts {
   jsonSchema?: unknown; // passed through as prompt guidance; NVIDIA free endpoints do not enforce schemas
   task?: string;
 }
-const clients: Record<string, OpenAI> = {};
-export function nvidia(): OpenAI {
+const clients: { groq?: OpenAI; gemini?: GoogleGenAI; nvidia?: OpenAI } = {};
+export function nvidiaSdk(): OpenAI {
   const key = process.env.NVIDIA_api ?? process.env.NVIDIA_API_KEY;
   if (!key) throw new Error("NVIDIA_api key missing in .env");
-  // Nemotron Ultra 550B can take 60-120s on a long prompt; allow up to 5 min before aborting.
   if (!clients.nvidia) clients.nvidia = new OpenAI({
     baseURL: "https://integrate.api.nvidia.com/v1",
     apiKey: key,
     timeout: 300_000,
-    maxRetries: 1, // never auto-retry on timeouts — those queries take minutes
+    maxRetries: 1,
   });
   return clients.nvidia;
+}
+
+export function geminiSdk(): GoogleGenAI {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY missing in .env");
+  if (!clients.gemini) clients.gemini = new GoogleGenAI({ apiKey: key });
+  return clients.gemini;
 }
 export function groqSdk(): OpenAI {
   const key = process.env.GROQ_API_KEY;
@@ -70,37 +77,45 @@ export async function chat(opts: ChatCallOpts): Promise<{ content: string; model
     let content = "";
     let usedModel = model;
     try {
-      const thinking = /nemotron-3-(ultra|super)/i.test(model)
-        ? ({ chat_template_kwargs: { enable_thinking: false } } as Record<string, unknown>)
-        : {};
-      const resp = await nvidia().chat.completions.create(
-        {
+      if (model.startsWith("gemini")) {
+        // use Gemini SDK for frontier
+        const response = await geminiSdk().models.generateContent({
           model,
-          messages,
-          temperature: opts.temperature ?? 0.5,
-          max_tokens: opts.maxTokens ?? 7000,
-          ...(opts.jsonObject ? { response_format: { type: "json_object" as const } } : {}),
-          ...thinking,
-        } as never,
-      );
-      content = (resp.choices?.[0]?.message?.content ?? "").trim();
-      void resp.usage;
+          contents: [
+            { role: "user", parts: [{ text: opts.system + "\n\n" + userContent }] }
+          ],
+          config: {
+            temperature: opts.temperature ?? 0.5,
+            maxOutputTokens: opts.maxTokens ?? 7000,
+            responseMimeType: opts.jsonObject ? "application/json" : "text/plain",
+          },
+        });
+        content = (response.text ?? "").trim();
+      } else {
+        throw new Error("Only gemini models are supported in the primary path now.");
+      }
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e);
       logLatency("llm_error", model, Date.now() - start, { error: msg.slice(0, 200) });
-      // fallback to Groq general model if NVIDIA is unreachable
-      usedModel = LLM_MODELS.groqGeneral;
-      trackModelApi(apiId, `LLM Fallback (${usedModel})`, "pending");
-      const resp = await groqSdk().chat.completions.create({
-        model: usedModel, messages, temperature: opts.temperature ?? 0.5, max_completion_tokens: opts.maxTokens ?? 7000,
+      // fallback to NVIDIA Nemotron if Gemini is unreachable or rate limited
+      usedModel = LLM_MODELS.nvidiaFallback;
+      trackModelApi(apiId, `LLM Fallback (${usedModel.split("/").pop()})`, "pending");
+      
+      const thinking = /nemotron-3-(ultra|super)/i.test(usedModel)
+        ? ({ chat_template_kwargs: { enable_thinking: false } } as Record<string, unknown>)
+        : {};
+        
+      const resp = await nvidiaSdk().chat.completions.create({
+        model: usedModel, messages, temperature: opts.temperature ?? 0.5, max_tokens: opts.maxTokens ?? 7000,
         ...(opts.jsonObject ? { response_format: { type: "json_object" as const } } : {}),
+        ...thinking,
       } as never);
       content = (resp.choices?.[0]?.message?.content ?? "").trim();
+      content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     }
     const latencyMs = Date.now() - start;
-    content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     logLatency("llm_call", usedModel, latencyMs, { task: opts.task });
-    trackModelApi(apiId, `LLM (${usedModel.split("/").pop()})`, "resolved", latencyMs);
+    trackModelApi(apiId, `LLM (${usedModel})`, "resolved", latencyMs);
     return { content, model: usedModel, latencyMs };
   })();
 

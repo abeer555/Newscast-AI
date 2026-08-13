@@ -45,6 +45,7 @@ export default function StudioPage() {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"script" | "listen" | "watch" | "review">("script");
   const [videoBusy, setVideoBusy] = useState(false);
+  const [showLangPicker, setShowLangPicker] = useState(false);
 
   const load = async () => {
     const j = await api<Episode>(`/api/episodes/${id}`);
@@ -83,6 +84,18 @@ export default function StudioPage() {
     } finally {
       setVideoBusy(false);
     }
+  };
+  const recreateInLanguage = async (lang: string) => {
+    if (!ep) return;
+    setShowLangPicker(false);
+    try {
+      const { id: newId } = await api<{ id: string }>("/api/episodes", {
+        method: "POST",
+        body: JSON.stringify({ clusterId: ep.cluster_id, format: ep.format, language: lang, style: "conversational" }),
+      });
+      pushToast("Recreating episode in new language...", "good");
+      window.location.href = `/studio/${newId}`;
+    } catch (e) { pushToast(String(e), "bad"); }
   };
 
   const stageIndex = useMemo(() => {
@@ -146,16 +159,18 @@ export default function StudioPage() {
           )}
           <div className="page-sub">Episode · created {timeAgo(ep.created_at)}{ep.audio_duration ? ` · ${fmtDuration(ep.audio_duration)}` : ""}</div>
         </div>
-        <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 10, flexShrink: 0, alignItems: "center" }}>
           {dirty && <button className={`btn ${busy ? "loading spin-light" : ""}`} onClick={() => save(true)} disabled={busy}>Save script</button>}
           {(ep.status === "script_ready" || (ep.status === "failed" && draft)) && (
             <button className={`btn primary ${busy ? "loading" : ""}`} onClick={synthesize} disabled={busy}>
               {ep.audio_path ? "Re-synthesize audio" : "Synthesize audio"}
             </button>
           )}
+          <button className="btn sm" onClick={() => setShowLangPicker(true)} title="Recreate in different language" style={{ gap: 6 }}>🌐 Language</button>
           {ep.status === "ready" && <span className="chip good" style={{ alignSelf: "center", padding: "8px 14px", fontSize: 13 }}>✓ On air</span>}
         </div>
       </div>
+      {showLangPicker && <LangPickerModal currentLang={ep.language} onClose={() => setShowLangPicker(false)} onPick={recreateInLanguage} />}
 
       {/* pipeline stages */}
       <div className="card pad" style={{ marginBottom: 20 }}>
@@ -414,3 +429,44 @@ function StatusPill({ status }: { status: string }) {
   const [label, cls] = map[status] ?? [status, ""];
   return <span className={`chip ${cls}`}>{label}</span>;
 }
+
+function LangPickerModal({ currentLang, onClose, onPick }: { currentLang: string; onClose: () => void; onPick: (lang: string) => void }) {
+  const LANGUAGES = [
+    { code: "en", native: "English", label: "English", cast: "Heart & Adam" },
+    { code: "hi", native: "हिन्दी", label: "Hindi", cast: "Priya & Arjun" },
+    { code: "es", native: "Español", label: "Spanish", cast: "Dora & Alex" },
+    { code: "fr", native: "Français", label: "French", cast: "Siwis & Sylvie" },
+    { code: "pt", native: "Português", label: "Portuguese", cast: "Dora & Alex" },
+    { code: "zh", native: "中文", label: "Chinese", cast: "Xiaobei & Yunxi" },
+  ];
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 700, marginBottom: 4 }}>🌐 Recreate in language</div>
+        <div className="muted" style={{ fontSize: 13, marginBottom: 18 }}>A new episode will be generated natively in the selected language with matching Kokoro voices. Your current episode is preserved.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+          {LANGUAGES.map((l) => (
+            <div
+              key={l.code}
+              onClick={() => onPick(l.code)}
+              className="card pad"
+              style={{
+                cursor: l.code === currentLang ? "default" : "pointer",
+                opacity: l.code === currentLang ? 0.4 : 1,
+                borderColor: l.code === currentLang ? "var(--accent)" : "var(--line-soft)",
+                background: l.code === currentLang ? "rgba(91,227,200,0.06)" : "var(--panel-2)",
+                padding: "12px 10px",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 17 }}>{l.native}</div>
+              <div className="dim" style={{ fontSize: 11, marginTop: 2 }}>{l.cast}</div>
+              {l.code === currentLang && <div style={{ fontSize: 10, color: "var(--accent)", marginTop: 4 }}>current</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+

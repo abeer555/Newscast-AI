@@ -2,7 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { getDb } from "./db";
-import { generateScript, EpisodeFormat, PodcastScript } from "./scriptgen";
+import { generateScript, EpisodeFormat, PodcastScript, ScriptLanguage } from "./scriptgen";
 import { synthesizeEpisode } from "./synth";
 import { chatJson } from "./chat";
 import { episodeProgress, logEvent } from "./bus";
@@ -76,7 +76,7 @@ export function emit(episodeId: string, status: string, progress: number, stage:
 export async function runEpisodePipeline(episodeId: string, critique?: string[]): Promise<void> {
   const db = getDb();
   const ep = db.prepare("SELECT * FROM episodes WHERE id=?").get(episodeId) as {
-    id: string; cluster_id: string; format: EpisodeFormat; language: "en" | "ar"; style: string; script: string | null; title: string;
+    id: string; cluster_id: string; format: EpisodeFormat; language: ScriptLanguage; style: string; script: string | null; title: string;
   };
   if (!ep) throw new Error("episode not found");
 
@@ -127,7 +127,7 @@ export async function runEpisodePipeline(episodeId: string, critique?: string[])
 export async function synthesizeCurrentScript(episodeId: string, intelArg?: unknown, factsArg?: VerifiedFact[]): Promise<void> {
   const db = getDb();
   const ep = db.prepare("SELECT * FROM episodes WHERE id=?").get(episodeId) as {
-    id: string; language: "en" | "ar"; script: string | null; cluster_id: string;
+    id: string; language: ScriptLanguage; script: string | null; cluster_id: string;
   };
   if (!ep?.script) throw new Error("No script to synthesize");
   const script = JSON.parse(ep.script) as PodcastScript;
@@ -305,22 +305,23 @@ export async function resumeEpisode(episodeId: string): Promise<void> {
  */
 export async function renderEpisodeVideoJob(episodeId: string): Promise<void> {
   const db = getDb();
-  const ep = db.prepare("SELECT id, cluster_id, script, audio_path, audio_duration FROM episodes WHERE id=?").get(episodeId) as
-    | { id: string; cluster_id: string; script: string | null; audio_path: string | null; audio_duration: number | null }
+  const ep = db.prepare("SELECT id, cluster_id, script, audio_path, audio_duration, format FROM episodes WHERE id=?").get(episodeId) as
+    | { id: string; cluster_id: string; script: string | null; audio_path: string | null; audio_duration: number | null; format: string }
     | undefined;
   if (!ep?.script || !ep.audio_path) throw new Error("video needs a script + synthesized audio");
 
   const script = JSON.parse(ep.script) as PodcastScript;
   const cl = db.prepare("SELECT intelligence FROM clusters WHERE id=?").get(ep.cluster_id) as { intelligence: string | null } | undefined;
   const intel = cl?.intelligence ? (JSON.parse(cl.intelligence) as StoryIntelligence) : null;
-  await renderVideoForEpisode(episodeId, script, intel, ep.audio_duration ?? script.estimated_seconds);
+  await renderVideoForEpisode(episodeId, script, intel, ep.audio_duration ?? script.estimated_seconds, ep.format === "reel");
 }
 
 async function renderVideoForEpisode(
   episodeId: string,
   script: PodcastScript,
   intel: StoryIntelligence | null,
-  audioDurationSec: number
+  audioDurationSec: number,
+  isReel = false,
 ): Promise<void> {
   const db = getDb();
 
@@ -388,6 +389,7 @@ async function renderVideoForEpisode(
     audioPath: audioFile,
     audioDuration: audioDurationSec,
     script,
+    isReel,
   });
 
   setEpisode(episodeId, { video_path: out.publicPath, video_duration: out.durationSec, video_status: "ready", video_error: null, status: "ready", progress: 1, stage_label: "Ready with video" });
@@ -400,7 +402,7 @@ function hashSeed(s: string): number {
   return h.readUInt32BE(0);
 }
 
-export function createEpisode(opts: { clusterId: string; format: EpisodeFormat; language: "en" | "ar"; style: string }): string {
+export function createEpisode(opts: { clusterId: string; format: EpisodeFormat; language: ScriptLanguage; style: string }): string {
   const db = getDb();
   const id = crypto.randomBytes(8).toString("hex");
   db.prepare(

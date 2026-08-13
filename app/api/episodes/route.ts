@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { createEpisode, runEpisodePipeline } from "@/lib/pipeline";
-import { EpisodeFormat } from "@/lib/scriptgen";
+import { EpisodeFormat, ScriptLanguage } from "@/lib/scriptgen";
 
 export async function GET() {
   const db = getDb();
@@ -23,10 +23,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const { clusterId, format = "briefing", language = "en", style = "conversational" } = body as {
-    clusterId: string; format: EpisodeFormat; language: "en" | "ar"; style: string;
+    clusterId: string; format: EpisodeFormat; language: string; style: string;
   };
   if (!clusterId) return NextResponse.json({ error: "clusterId required" }, { status: 400 });
-  const id = createEpisode({ clusterId, format, language, style });
+  const id = createEpisode({ clusterId, format, language: language as ScriptLanguage, style });
   // fire-and-forget pipeline (SSE streams progress)
   void runEpisodePipeline(id);
   return NextResponse.json({ id });

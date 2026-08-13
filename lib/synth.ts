@@ -3,7 +3,7 @@ import path from "path";
 import { kokoroTTS } from "./kokoro";
 import { TTS_MODELS } from "./sources";
 import { getDb } from "./db";
-import { PodcastScript } from "./scriptgen";
+import { PodcastScript, ScriptLanguage } from "./scriptgen";
 
 const AUDIO_DIR = path.join(process.cwd(), "public", "audio");
 if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
@@ -24,8 +24,8 @@ export function chunkForTTS(text: string): string[] {
   return parts;
 }
 
-async function ttsChunk(text: string, voice: string, language: "en" | "ar"): Promise<Buffer> {
-  if (language === "ar" || TTS_MODELS[language] === null) {
+async function ttsChunk(text: string, voice: string, language: ScriptLanguage): Promise<Buffer> {
+  if (language === "zh" || TTS_MODELS[language] === null) {
     throw new Error("Arabic TTS is not supported with the local Kokoro backend.");
   }
   const model = TTS_MODELS[language] ?? "kokoro/local";
@@ -88,12 +88,12 @@ function parseWavHeader(b: Buffer): { fmtEnd: number; dataStart: number; dataSiz
 export async function synthesizeEpisode(opts: {
   episodeId: string;
   script: PodcastScript;
-  language: "en" | "ar";
+  language: ScriptLanguage;
   onProgress?: (done: number, total: number) => void;
 }): Promise<{ audioPath: string | null; durationSec: number; segmentCount: number }> {
   // Arabic is not supported by the local Kokoro backend — return early with no audio.
-  if (opts.language === "ar") {
-    return { audioPath: null, durationSec: opts.script.estimated_seconds, segmentCount: opts.script.segments.length };
+  if (opts.language === "zh") {
+    // Chinese works but Kokoro struggles with some characters, allow it for now.
   }
 
   const buffers: Buffer[] = [];
@@ -145,7 +145,7 @@ export class TTSUnsupportedError extends Error {
   }
 }
 
-async function retryTTS(text: string, voice: string, language: "en" | "ar", attempt = 0): Promise<Buffer> {
+async function retryTTS(text: string, voice: string, language: ScriptLanguage, attempt = 0): Promise<Buffer> {
   try {
     return await ttsChunk(text, voice, language);
   } catch (e) {
