@@ -1,7 +1,7 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["better-sqlite3", "groq-sdk"],
-};
+  allowedDevOrigins: ['t0r.tech'],
+}
 
-export default nextConfig;
+export default nextConfig
