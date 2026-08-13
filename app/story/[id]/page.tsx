@@ -358,7 +358,7 @@ export default function StoryPage() {
 
 export function GenerateModal({ clusterId, onClose, onGo }: { clusterId: string; onClose: () => void; onGo: (episodeId: string) => void }) {
   const pushToast = useStore((s) => s.pushToast);
-  const [format, setFormat] = useState<"briefing" | "deepdive" | "debate">("briefing");
+  const [format, setFormat] = useState<"briefing" | "deepdive" | "debate" | "video">("briefing");
   const language = "en";
   const [busy, setBusy] = useState(false);
 
@@ -383,6 +383,7 @@ export function GenerateModal({ clusterId, onClose, onGo }: { clusterId: string;
             ["briefing", "Daily Briefing", "~90s · punchy essentials, energetic"],
             ["deepdive", "Deep Dive", "~3min · analysis, framing, what's next"],
             ["debate", "Two Chairs", "~2.5min · hosts explore competing readings"],
+            ["video", "Full Length", "10-15min · extensive documentary dive"],
           ] as const).map(([v, name, desc]) => (
             <div key={v} onClick={() => setFormat(v)} className="card pad" style={{ cursor: "pointer", borderColor: format === v ? "var(--accent)" : "var(--line-soft)", background: format === v ? "rgba(91,227,200,0.06)" : "var(--panel-2)", padding: "12px 15px" }}>
               <div style={{ fontWeight: 600, fontSize: 14 }}>{name}</div>

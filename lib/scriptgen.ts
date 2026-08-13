@@ -58,12 +58,13 @@ function scriptSchema(maxSeg: number) {
   };
 }
 
-export type EpisodeFormat = "briefing" | "deepdive" | "debate";
+export type EpisodeFormat = "briefing" | "deepdive" | "debate" | "video";
 
 const FORMAT_SPECS: Record<EpisodeFormat, { segs: string; brief: string }> = {
   briefing: { segs: "14-18", brief: "a tight 90-second morning briefing: hook the listener instantly, deliver the 5 essential facts with momentum, one line of context, crisp sign-off. Energetic pacing." },
   deepdive: { segs: "22-30", brief: "a 3-minute analytical deep-dive: set the scene, walk through what happened, why it matters, how different outlets are framing it, what to watch next. Thoughtful, authoritative." },
   debate: { segs: "20-26", brief: "a spirited but respectful two-host exchange: present the story, then have the hosts naturally explore different angles and tensions (e.g. optimistic vs skeptical readings), converging on what's solid. Conversational chemistry." },
+  video: { segs: "90-120", brief: "a comprehensive 10-15 minute documentary-style deep-dive: expansive introduction, deep historical context, extensive multi-angle analysis, pacing suited for a longer visual format. Highly detailed, authoritative, and narrative-driven." },
 };
 
 export async function generateScript(opts: {
@@ -116,19 +117,44 @@ ${opts.critique?.length ? `CRITIQUE FROM PREVIOUS DRAFT (MUST ADDRESS):\n${opts.
     system: "You are the head podcast writer at NEWSCAST AI, producing scripts performed by AI voices. You write for the ear: short sentences, no lists, no URLs, natural spoken flow with light chemistry between hosts.",
     user: prompt,
     jsonSchema: scriptSchema(30),
-    maxTokens: 5000,
+    maxTokens: opts.format === "video" ? 16000 : 5000,
     temperature: 0.75,
   });
+  const MIN_VIDEO_SEGS = 70;
 
-  const segments: ScriptSegment[] = data.segments
+  let allRawSegs = data.segments ?? [];
+
+  // For video format: if the first pass came back short, make a second "continuation" call
+  if (opts.format === "video" && allRawSegs.length < MIN_VIDEO_SEGS) {
+    const soFarText = allRawSegs
+      .map((s, i) => `[${i + 1}] ${s.speaker ?? "?"}: ${s.text ?? ""}`)
+      .join("\n");
+
+    const { data: cont } = await chatJson<{ segments: { speaker: string; direction: string; text: string }[] }>({
+      system: "You are the head podcast writer at NEWSCAST AI continuing a long-form documentary episode script. Only output the REMAINING segments as a JSON object with a 'segments' array. Do NOT repeat or summarise already-written segments. Pick up exactly where the script left off.",
+      user: `ORIGINAL PROMPT CONTEXT:\n${prompt}\n\nSCRIPT SO FAR (${allRawSegs.length} segments — CONTINUE FROM SEGMENT ${allRawSegs.length + 1}):\n${soFarText}\n\nWrite the remaining segments to reach at least ${MIN_VIDEO_SEGS} total segments (ideally 90-120). Output ONLY a JSON object: {"segments":[{"speaker":"...","direction":"...","text":"..."},...]}`,
+      jsonObject: true,
+      maxTokens: 16000,
+      temperature: 0.75,
+      task: "video_continuation",
+    });
+
+    if (Array.isArray(cont.segments) && cont.segments.length > 0) {
+      allRawSegs = [...allRawSegs, ...cont.segments];
+    }
+  }
+
+  const segments: ScriptSegment[] = allRawSegs
+    .filter((s) => s && typeof s === "object")
     .map((s, i) => {
-      const castMember = cast.find((c) => c.name.toLowerCase() === s.speaker.toLowerCase()) ?? cast[i % cast.length];
+      const castMember = cast.find((c) => c.name.toLowerCase() === (s.speaker || "").toLowerCase()) ?? cast[i % cast.length];
+      const rawText = String(s.text ?? "");
       return {
         index: i,
         speaker: castMember.name,
         voice: castMember.voice,
         direction: opts.language === "ar" ? "" : sanitizeDirection(s.direction),
-        text: s.text.replace(/\[.*?\]/g, "").slice(0, 158),
+        text: rawText.replace(/\[.*?\]/g, "").slice(0, 158),
       };
     })
     .filter((s) => s.text.trim().length > 0);

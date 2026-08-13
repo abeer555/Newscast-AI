@@ -6,7 +6,8 @@ import { trackModelApi } from "./bus";
 /** Multi-provider LLM router — NVIDIA NIM heavy models for reasoning, Groq for TTS voices. */
 
 export const LLM_MODELS = {
-  frontier: "nvidia/nemotron-3-ultra-550b-a55b",
+  // frontier: "nvidia/nemotron-3-ultra-550b-a55b",
+  frontier: "nvidia/nemotron-3-super-120b-a12b",
   heavy: "nvidia/nemotron-3-super-120b-a12b",
   groqStructured: "openai/gpt-oss-120b",
   groqGeneral: "llama-3.3-70b-versatile",
