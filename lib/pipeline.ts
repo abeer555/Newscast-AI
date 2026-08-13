@@ -73,7 +73,7 @@ export function emit(episodeId: string, status: string, progress: number, stage:
   episodeProgress(episodeId, status, progress, stage, extra);
 }
 
-export async function runEpisodePipeline(episodeId: string): Promise<void> {
+export async function runEpisodePipeline(episodeId: string, critique?: string[]): Promise<void> {
   const db = getDb();
   const ep = db.prepare("SELECT * FROM episodes WHERE id=?").get(episodeId) as {
     id: string; cluster_id: string; format: EpisodeFormat; language: "en" | "ar"; style: string; script: string | null; title: string;
@@ -100,7 +100,7 @@ export async function runEpisodePipeline(episodeId: string): Promise<void> {
 
     // 2. script
     emit(episodeId, "scripting", 0.18, "Writing episode script");
-    const { script, intel, model } = await generateScript({ clusterId: ep.cluster_id, format: ep.format, language: ep.language, style: ep.style });
+    const { script, intel, model } = await generateScript({ clusterId: ep.cluster_id, format: ep.format, language: ep.language, style: ep.style, critique });
     const scriptHash = crypto.createHash("sha1").update(JSON.stringify(script.segments.map((s) => [s.voice, s.text]))).digest("hex");
     setEpisode(episodeId, {
       script: JSON.stringify(script),
@@ -118,12 +118,9 @@ export async function runEpisodePipeline(episodeId: string): Promise<void> {
     await synthesizeCurrentScript(episodeId, intel, facts);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const friendly = msg.startsWith("TERMS_REQUIRED:")
-      ? `Voice model '${msg.slice("TERMS_REQUIRED:".length)}' needs one-time terms acceptance in the Groq console — then press Synthesize audio.`
-      : msg;
-    setEpisode(episodeId, { status: "failed", error: friendly, progress: 0 });
-    episodeProgress(episodeId, "failed", 0, friendly);
-    logEvent("error", `Episode ${episodeId} failed`, friendly);
+    setEpisode(episodeId, { status: "failed", error: msg, progress: 0 });
+    episodeProgress(episodeId, "failed", 0, msg);
+    logEvent("error", `Episode ${episodeId} failed`, msg);
   }
 }
 
@@ -234,16 +231,21 @@ export async function synthesizeCurrentScript(episodeId: string, intelArg?: unkn
   // 5. video + publish gate
   const isPublished = publishDecision === "publish";
   const publishedAt = isPublished ? Date.now() : null;
+  const hasAudio = result.audioPath !== null;
+  
   setEpisode(episodeId, {
     status: isPublished ? "ready" : "needs_review",
     progress: isPublished ? 1 : 0.95,
-    stage_label: isPublished ? "Ready — video render queued" : "Held for human review — confidence too low",
+    stage_label: isPublished ? (hasAudio ? "Ready — video render queued" : "Ready (Audio skipped)") : "Held for human review — confidence too low",
     published_at: publishedAt,
   });
-  episodeProgress(episodeId, isPublished ? "ready" : "needs_review", isPublished ? 1 : 0.95, isPublished ? "Ready — video render queued" : "Held for human review");
+  episodeProgress(episodeId, isPublished ? "ready" : "needs_review", isPublished ? 1 : 0.95, isPublished ? (hasAudio ? "Ready — video render queued" : "Ready (Audio skipped)") : "Held for human review");
+  
   try {
-    if (enqueueVideoRender(episodeId)) {
-      logEvent("pipeline", `Video render queued for ${episodeId}`);
+    if (isPublished && hasAudio) {
+      if (enqueueVideoRender(episodeId)) {
+        logEvent("pipeline", `Video render queued for ${episodeId}`);
+      }
     }
   } catch (e) {
     logEvent("error", `Could not queue video for ${episodeId}`, String(e));

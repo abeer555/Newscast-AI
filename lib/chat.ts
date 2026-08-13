@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import crypto from "crypto";
 import { getDb } from "./db";
+import { trackModelApi } from "./bus";
 
 /** Multi-provider LLM router — NVIDIA NIM heavy models for reasoning, Groq for TTS voices. */
 
@@ -55,6 +56,8 @@ export async function chat(opts: ChatCallOpts): Promise<{ content: string; model
   if (inflight) { const r = await inflight; return { ...r, cached: true }; }
 
   const run = (async () => {
+    const apiId = `llm_${crypto.randomBytes(4).toString("hex")}`;
+    trackModelApi(apiId, `LLM (${model.split("/").pop()})`, "pending");
     const userContent = opts.jsonObject
       ? `${opts.user}\n\nRespond with ONLY a single valid JSON object matching this shape: ${JSON.stringify((opts.jsonSchema as { schema?: { properties?: Record<string, unknown> } } | undefined)?.schema?.properties ? Object.keys((opts.jsonSchema as { schema: { properties: Record<string, unknown> } }).schema.properties) : "the requested object")}. No prose, no markdown fences.`
       : opts.user;
@@ -86,6 +89,7 @@ export async function chat(opts: ChatCallOpts): Promise<{ content: string; model
       logLatency("llm_error", model, Date.now() - start, { error: msg.slice(0, 200) });
       // fallback to Groq general model if NVIDIA is unreachable
       usedModel = LLM_MODELS.groqGeneral;
+      trackModelApi(apiId, `LLM Fallback (${usedModel})`, "pending");
       const resp = await groqSdk().chat.completions.create({
         model: usedModel, messages, temperature: opts.temperature ?? 0.5, max_completion_tokens: opts.maxTokens ?? 7000,
         ...(opts.jsonObject ? { response_format: { type: "json_object" as const } } : {}),
@@ -95,6 +99,7 @@ export async function chat(opts: ChatCallOpts): Promise<{ content: string; model
     const latencyMs = Date.now() - start;
     content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     logLatency("llm_call", usedModel, latencyMs, { task: opts.task });
+    trackModelApi(apiId, `LLM (${usedModel.split("/").pop()})`, "resolved", latencyMs);
     return { content, model: usedModel, latencyMs };
   })();
 

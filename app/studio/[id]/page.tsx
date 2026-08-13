@@ -64,10 +64,25 @@ export default function StudioPage() {
     setVideoBusy(true);
     try {
       await api(`/api/episodes/${id}/video`, { method: "POST" });
-      pushToast("Video render queued — frames on your local Z-Image, then ffmpeg stitch", "good");
-      await load();
-    } catch (e) { pushToast(`${e}`, "bad"); }
-    setVideoBusy(false);
+      pushToast("Video render queued — this uses your local GPU heavily", "good");
+    } catch (e) {
+      pushToast(String(e), "bad");
+    } finally {
+      setVideoBusy(false);
+    }
+  };
+
+  const regenerateWithCritique = async () => {
+    if (!ep?.evaluation?.improvements) return;
+    setVideoBusy(true);
+    try {
+      await api(`/api/episodes/${id}/regenerate`, { method: "POST", body: JSON.stringify({ critique: ep.evaluation.improvements }) });
+      pushToast("Regenerating script based on Editor critique...", "good");
+    } catch (e) {
+      pushToast(String(e), "bad");
+    } finally {
+      setVideoBusy(false);
+    }
   };
 
   const stageIndex = useMemo(() => {
@@ -117,7 +132,6 @@ export default function StudioPage() {
         <div style={{ maxWidth: 760 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <span className="chip ai">{ep.format}</span>
-            <span className="chip">{ep.language === "ar" ? "العربية" : "English"}</span>
             <span className="chip src">{ep.script_model ?? "…"}</span>
             <StatusPill status={ep.status} />
           </div>
@@ -168,20 +182,10 @@ export default function StudioPage() {
             </div>
             {ep.status === "failed" && (
               <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 10, background: "rgba(255,107,107,0.08)", border: "1px solid rgba(255,107,107,0.3)", fontSize: 13 }}>
-                {termsIssue ? (
-                  <>
-                    <b style={{ color: "var(--bad)" }}>Voice model needs a one-time opt-in.</b>
-                    <div className="muted" style={{ marginTop: 6, lineHeight: 1.6 }}>
-                      Groq requires org-admin acceptance of the Orpheus TTS terms (free). Visit{" "}
-                      <a href="https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english" target="_blank" rel="noreferrer" style={{ color: "var(--accent-2)", textDecoration: "underline" }}>
-                        console.groq.com/playground
-                      </a>{" "}
-                      with model <span className="mono">orpheus-v1-english</span> selected, accept the terms, then press <b>Synthesize audio</b>. Your script is saved.
-                    </div>
-                  </>
-                ) : (
-                  <span className="mono" style={{ color: "var(--bad)" }}>{ep.error}</span>
-                )}
+                <div style={{ lineHeight: 1.6 }}>
+                  <div style={{ color: "var(--red)", fontWeight: 600, marginBottom: 8 }}>Pipeline error: {ep.error}</div>
+                  <div className="dim">The generation pipeline failed at the <b>{ep.stage_label.toLowerCase()}</b> stage. You can retry synthesis or run the pipeline again.</div>
+                </div>
               </div>
             )}
           </div>
@@ -381,7 +385,10 @@ export default function StudioPage() {
                   </div>
                   <div className="card pad" style={{ borderLeft: "3px solid var(--warm)" }}>
                     <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--warm)", fontWeight: 600, marginBottom: 8 }}>Improve</div>
-                    <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.75, fontSize: 13.5 }}>{(ep.evaluation.improvements ?? []).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.75, fontSize: 13.5, marginBottom: 16 }}>{(ep.evaluation.improvements ?? []).map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    <button className={`btn sm ${videoBusy ? "loading" : ""}`} onClick={regenerateWithCritique} disabled={videoBusy} style={{ width: "100%", justifyContent: "center" }}>
+                      Regenerate script based on critique
+                    </button>
                   </div>
                 </div>
               )}

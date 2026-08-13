@@ -52,7 +52,7 @@ export default function AnalyticsPage() {
           ))}
           {a.tts.calls > 0 && (
             <div className="card pad" style={{ background: "var(--panel-2)", marginTop: 8 }}>
-              <span className="mono" style={{ color: "var(--accent-2)", fontSize: 13 }}>orpheus TTS</span>
+              <span className="mono" style={{ color: "var(--accent-2)", fontSize: 13 }}>kokoro TTS</span>
               <div className="mono dim" style={{ fontSize: 11.5, marginTop: 4 }}>{a.tts.calls} chunks · {a.tts.chars?.toLocaleString()} chars · avg {a.tts.avg_latency}ms</div>
             </div>
           )}

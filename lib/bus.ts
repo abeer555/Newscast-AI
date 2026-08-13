@@ -24,3 +24,7 @@ export function logEvent(type: string, message: string, meta?: unknown) {
 export function episodeProgress(episodeId: string, status: string, progress: number, stageLabel: string, extra?: unknown) {
   bus().emit("episode", { episodeId, status, progress, stageLabel, extra, at: Date.now() });
 }
+
+export function trackModelApi(id: string, name: string, status: "pending" | "resolved" | "error", ms?: number) {
+  bus().emit("model_api", { id, name, status, ms, at: Date.now() });
+}

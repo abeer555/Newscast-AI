@@ -38,28 +38,26 @@ export const NEWS_SOURCES: NewsSource[] = [
 
 export const INDIA_SOURCE_IDS = new Set(["hindu", "toi", "ndtv", "hindustan", "news18", "theprint", "scroll", "indiatoday", "firstpost", "thewire"]);
 
+// Kokoro voice IDs — American English (af_ = American Female, am_ = American Male)
+// Full list: hexgrad/Kokoro-82M on Hugging Face under voices/
 export const VOICES = {
   en: [
-    { id: "autumn", name: "Autumn", gender: "female" },
-    { id: "diana", name: "Diana", gender: "female" },
-    { id: "hannah", name: "Hannah", gender: "female" },
-    { id: "austin", name: "Austin", gender: "male" },
-    { id: "daniel", name: "Daniel", gender: "male" },
-    { id: "troy", name: "Troy", gender: "male" },
+    { id: "af_heart",   name: "Heart",   gender: "female" },
+    { id: "af_bella",   name: "Bella",   gender: "female" },
+    { id: "af_nicole",  name: "Nicole",  gender: "female" },
+    { id: "af_sarah",   name: "Sarah",   gender: "female" },
+    { id: "am_adam",    name: "Adam",    gender: "male"   },
+    { id: "am_michael", name: "Michael", gender: "male"   },
   ],
-  ar: [
-    { id: "abdullah", name: "Abdullah", gender: "male" },
-    { id: "fahad", name: "Fahad", gender: "male" },
-    { id: "sultan", name: "Sultan", gender: "male" },
-    { id: "lulwa", name: "Lulwa", gender: "female" },
-    { id: "noura", name: "Noura", gender: "female" },
-    { id: "aisha", name: "Aisha", gender: "female" },
-  ],
+  // Arabic not supported by Kokoro — audio generation is skipped for Arabic episodes
+  ar: [] as { id: string; name: string; gender: string }[],
 } as const;
 
+// "kokoro" is a local-only sentinel — the actual model is the kokoro_server.py process.
+// The value is used for analytics logging only; no cloud API is called.
 export const TTS_MODELS = {
-  en: "canopylabs/orpheus-v1-english",
-  ar: "canopylabs/orpheus-arabic-saudi",
+  en: "kokoro/af_heart",
+  ar: null,   // no TTS for Arabic
 } as const;
 
 export const LLM = {

@@ -11,9 +11,10 @@ interface State {
   ingestLog: string[];
   stats: Stats | null;
   episodeProgress: Record<string, EpisodeProgress>;
+  apiRequests: { id: string; url: string; status: "pending" | "resolved" | "error"; ms?: number; ts: number }[];
 }
 
-let state: State = { toasts: [], ingestLog: [], stats: null, episodeProgress: {} };
+let state: State = { toasts: [], ingestLog: [], stats: null, episodeProgress: {}, apiRequests: [] };
 const listeners = new Set<() => void>();
 let toastId = 1;
 
@@ -33,6 +34,16 @@ export const store = {
   dismissToast(id: number) { set({ toasts: state.toasts.filter((t) => t.id !== id) }); },
   appendLog(line: string) { set({ ingestLog: [line, ...state.ingestLog].slice(0, 40) }); },
   updateEpisodeProgress(p: EpisodeProgress) { set({ episodeProgress: { ...state.episodeProgress, [p.episodeId]: p } }); },
+  trackApiStart(id: string, url: string) {
+    set({ apiRequests: [{ id, url, status: "pending", ts: Date.now() }, ...state.apiRequests].slice(0, 100) });
+  },
+  trackApiEnd(id: string, status: "resolved" | "error") {
+    set({
+      apiRequests: state.apiRequests.map((r) =>
+        r.id === id ? { ...r, status, ms: Date.now() - r.ts } : r
+      ),
+    });
+  },
   async refreshStats() {
     try {
       const r = await fetch("/api/analytics");
@@ -53,6 +64,8 @@ const actions = {
   pushToast: store.pushToast,
   dismissToast: store.dismissToast,
   updateEpisodeProgress: store.updateEpisodeProgress,
+  trackApiStart: store.trackApiStart,
+  trackApiEnd: store.trackApiEnd,
 };
 
 /* ------- api helper ------- */

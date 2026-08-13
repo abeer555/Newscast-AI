@@ -84,7 +84,7 @@ export default function LibraryPage() {
                   <Link key={e.id} href={`/studio/${e.id}`} className="card pad" style={{ borderLeft: "3px solid var(--warm)", display: "block" }}>
                     <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                       <span className="chip ai">{e.format}</span>
-                      <span className="chip">{e.language === "ar" ? "العربية" : "EN"}</span>
+                      <span className="chip src">{e.format}</span>
                       {e.cluster_category && <span className="chip cat">{e.cluster_category}</span>}
                       {typeof e.evaluation?.publish_confidence === "number" && (
                         <span className="chip warm">{Math.round((e.evaluation.publish_confidence as number) * 100)}% conf</span>
@@ -104,7 +104,7 @@ export default function LibraryPage() {
               <div>
                 <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                   <span className="chip ai">{e.format}</span>
-                  <span className="chip">{e.language === "ar" ? "العربية" : "EN"}</span>
+                  <span className="chip src">{e.format}</span>
                   {e.cluster_category && <span className="chip cat">{e.cluster_category}</span>}
                   {typeof e.evaluation?.publish_confidence === "number" ? (
                     <span className={e.evaluation.publish_confidence >= 0.72 ? "chip good" : "chip warm"} title={(e.evaluation.reasons ?? []).join(" · ")}>

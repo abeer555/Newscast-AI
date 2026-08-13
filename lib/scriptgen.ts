@@ -6,7 +6,7 @@ export interface ScriptSegment {
   index: number;
   speaker: string;
   voice: string;
-  direction: string; // vocal direction for Orpheus, e.g. "[warm]" — empty string for none
+  direction: string; // vocal direction for Kokoro, e.g. "[warm]" — empty string for none
   text: string;
 }
 
@@ -20,8 +20,8 @@ export interface PodcastScript {
 }
 
 const VOICE_CAST_EN = [
-  { name: "Autumn", voice: "autumn", role: "host" },
-  { name: "Daniel", voice: "daniel", role: "analyst" },
+  { name: "Heart", voice: "af_heart", role: "host" },
+  { name: "Adam", voice: "am_adam", role: "analyst" },
 ];
 const VOICE_CAST_AR = [
   { name: "نورة", voice: "noura", role: "host" },
@@ -43,7 +43,7 @@ function scriptSchema(maxSeg: number) {
             type: "object",
             properties: {
               speaker: { type: "string", description: "host name from the cast" },
-              direction: { type: "string", description: "single Orpheus vocal direction like cheerful or empty string" },
+              direction: { type: "string", description: "single Kokoro vocal direction like cheerful or empty string" },
               text: { type: "string", description: "spoken line, 1-2 sentences, max 120 characters, plain speakable text without brackets" },
             },
             required: ["speaker", "direction", "text"],
@@ -71,6 +71,7 @@ export async function generateScript(opts: {
   format: EpisodeFormat;
   language: "en" | "ar";
   style: string;
+  critique?: string[];
 }): Promise<{ script: PodcastScript; intel: StoryIntelligence; model: string }> {
   const intel = await analyzeCluster(opts.clusterId);
   const db = getDb();
@@ -87,10 +88,7 @@ export async function generateScript(opts: {
   const spec = FORMAT_SPECS[opts.format];
   const srcList = articles.map((a) => `${a.source_name}: "${a.title}"`).join("; ");
 
-  const langInstruction =
-    opts.language === "ar"
-      ? "Write the ENTIRE script in Modern Standard Arabic (فصحى), natural broadcast style. Direction field must be an EMPTY string (Arabic model does not support vocal directions)."
-      : "Write in English. The direction field may contain ONE short Orpheus vocal direction (e.g. cheerful, warm, serious, thoughtful, curious) or be an empty string; vary it naturally, mostly conversational with occasional expressive moments.";
+  const langInstruction = "Write in English. The direction field may contain ONE short Kokoro vocal direction (e.g. cheerful, warm, serious, thoughtful, curious) or be an empty string; vary it naturally, mostly conversational with occasional expressive moments.";
 
   const prompt = `STORY INTELLIGENCE DOSSIER:
 HEADLINE: ${intel.headline}
@@ -110,7 +108,9 @@ Format: NEWSCAST AI audio show "${opts.format}" — two speakers: ${castBlock}. 
 Constraints: EXACTLY ${spec.segs} segments. Each segment text is 1-2 short sentences and MUST be under 120 characters (it feeds a text-to-speech engine with a hard limit).
 Title: punchy episode title (≤70 chars). Description: 1 sentence. Tags: 3-5 lowercase topics.
 ${langInstruction}
-Speaker field must be exactly one of: ${cast.map((c) => c.name).join(", ")}.`;
+Speaker field must be exactly one of: ${cast.map((c) => c.name).join(", ")}.
+
+${opts.critique?.length ? `CRITIQUE FROM PREVIOUS DRAFT (MUST ADDRESS):\n${opts.critique.map(c => `- ${c}`).join("\n")}` : ""}`;
 
   const { data, model } = await chatJson<{ title: string; description: string; tags: string[]; segments: { speaker: string; direction: string; text: string }[] }>({
     system: "You are the head podcast writer at NEWSCAST AI, producing scripts performed by AI voices. You write for the ear: short sentences, no lists, no URLs, natural spoken flow with light chemistry between hosts.",

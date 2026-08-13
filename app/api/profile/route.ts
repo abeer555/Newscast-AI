@@ -17,6 +17,6 @@ export async function POST(req: NextRequest) {
   db.prepare(`
     INSERT INTO user_profile (id, interests, preferred_language, preferred_voice, updated_at) VALUES ('local',?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET interests=excluded.interests, preferred_language=excluded.preferred_language, preferred_voice=excluded.preferred_voice, updated_at=excluded.updated_at
-  `).run(JSON.stringify(body.interests ?? []), body.preferred_language ?? "en", body.preferred_voice ?? "autumn", Date.now());
+  `).run(JSON.stringify(body.interests ?? []), body.preferred_language ?? "en", body.preferred_voice ?? "af_heart", Date.now());
   return NextResponse.json({ ok: true });
 }

@@ -359,7 +359,7 @@ export default function StoryPage() {
 export function GenerateModal({ clusterId, onClose, onGo }: { clusterId: string; onClose: () => void; onGo: (episodeId: string) => void }) {
   const pushToast = useStore((s) => s.pushToast);
   const [format, setFormat] = useState<"briefing" | "deepdive" | "debate">("briefing");
-  const [language, setLanguage] = useState<"en" | "ar">("en");
+  const language = "en";
   const [busy, setBusy] = useState(false);
 
   const go = async () => {
@@ -391,15 +391,11 @@ export function GenerateModal({ clusterId, onClose, onGo }: { clusterId: string;
           ))}
         </div>
 
-        <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 8 }}>Language & cast</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 22 }}>
-          <div onClick={() => setLanguage("en")} className="card pad" style={{ cursor: "pointer", borderColor: language === "en" ? "var(--accent)" : "var(--line-soft)", background: language === "en" ? "rgba(91,227,200,0.06)" : "var(--panel-2)", padding: "12px 15px" }}>
+        <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 8 }}>Cast</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginBottom: 22 }}>
+          <div className="card pad" style={{ borderColor: "var(--accent)", background: "rgba(91,227,200,0.06)", padding: "12px 15px" }}>
             <div style={{ fontWeight: 600, fontSize: 14 }}>English</div>
-            <div className="dim" style={{ fontSize: 12.5 }}>Autumn & Daniel · Orpheus expressive</div>
-          </div>
-          <div onClick={() => setLanguage("ar")} className="card pad" style={{ cursor: "pointer", borderColor: language === "ar" ? "var(--accent)" : "var(--line-soft)", background: language === "ar" ? "rgba(91,227,200,0.06)" : "var(--panel-2)", padding: "12px 15px" }}>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>العربية</div>
-            <div className="dim" style={{ fontSize: 12.5 }}>نورة و فهد · Saudi dialect</div>
+            <div className="dim" style={{ fontSize: 12.5 }}>Heart & Adam · Kokoro expressive</div>
           </div>
         </div>
 

@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { getDb } from "./db";
+import { trackModelApi } from "./bus";
 
 /**
  * ComfyUI client for the locally-hosted Z-Image-Turbo workflow (see Z-image.json).
@@ -53,12 +55,22 @@ export async function generateImage(opts: GenImageOpts): Promise<{ filePath: str
   wf[NODE.saveImage].inputs.filename_prefix = "newscast";
 
   const start = Date.now();
-  const submit = await fetch(`${COMFY_URL}/prompt`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt: wf }),
-  });
-  if (!submit.ok) throw new Error(`ComfyUI submit failed: HTTP ${submit.status}`);
+  const apiId = `zimg_${crypto.randomBytes(4).toString("hex")}`;
+  trackModelApi(apiId, "Z-Image-Turbo", "pending");
+
+  let submit: Response;
+  try {
+    submit = await fetch(`${COMFY_URL}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: wf }),
+    });
+    if (!submit.ok) throw new Error(`ComfyUI submit failed: HTTP ${submit.status}`);
+  } catch (e) {
+    trackModelApi(apiId, "Z-Image-Turbo", "error");
+    throw e;
+  }
+  
   const { prompt_id } = (await submit.json()) as { prompt_id: string };
 
   const timeout = opts.timeoutMs ?? 180_000;
@@ -72,12 +84,16 @@ export async function generateImage(opts: GenImageOpts): Promise<{ filePath: str
     const job = data[prompt_id];
     if (!job) continue;
     if (job.status?.status_str === "error") {
+      trackModelApi(apiId, "Z-Image-Turbo", "error");
       throw new Error(`ComfyUI job error: ${JSON.stringify(job.status).slice(0, 200)}`);
     }
     const imgs = job.outputs?.[NODE.saveImage]?.images;
     if (imgs?.length) { filename = imgs[0].filename; break; }
   }
-  if (!filename) throw new Error(`ComfyUI timed out after ${timeout}ms`);
+  if (!filename) {
+    trackModelApi(apiId, "Z-Image-Turbo", "error");
+    throw new Error(`ComfyUI timed out after ${timeout}ms`);
+  }
 
   const imgRes = await fetch(`${COMFY_URL}/view?filename=${encodeURIComponent(filename)}&type=output`);
   if (!imgRes.ok) throw new Error(`Failed to fetch image ${filename}`);
@@ -86,6 +102,7 @@ export async function generateImage(opts: GenImageOpts): Promise<{ filePath: str
   const out = path.join(FRAMES_DIR, filename.replace(/^newscast/, `nc_${Date.now()}_${Math.floor(Math.random() * 999)}`));
   fs.writeFileSync(out, buf);
   const latencyMs = Date.now() - start;
+  trackModelApi(apiId, "Z-Image-Turbo", "resolved", latencyMs);
   try { getDb().prepare("INSERT INTO analytics_events (kind, model, latency_ms, meta, created_at) VALUES ('image_gen','z-image-turbo',?,?,?)").run(latencyMs, JSON.stringify({ chars: opts.prompt.length }), Date.now()); } catch { /* */ }
   return { filePath: out, latencyMs };
 }

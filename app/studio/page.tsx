@@ -25,7 +25,7 @@ export default function StudioIndex() {
               <div className="story-title">{e.title}</div>
               <div className="story-meta">
                 <span className="chip ai">{e.format}</span>
-                <span className="chip">{e.language.toUpperCase()}</span>
+                <span className="chip">{e.format}</span>
                 <span className="chip src">{e.status}</span>
                 {e.evaluation && <span className="chip good">★ {e.evaluation.overall}</span>}
                 <span>{fmtDuration(e.audio_duration)} · {timeAgo(e.created_at)}</span>

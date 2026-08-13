@@ -29,15 +29,15 @@ const script = {
   description: "Five-beat visual test of the NEWSCAST AI video pipeline.",
   tags: ["test", "visual"],
   hosts: [
-    { name: "Autumn", role: "host", voice: "autumn" },
-    { name: "Daniel", role: "analyst", voice: "daniel" },
+    { name: "Heart", role: "host", voice: "af_heart" },
+    { name: "Adam", role: "analyst", voice: "am_adam" },
   ],
   segments: [
-    { index: 0, speaker: "Autumn", voice: "autumn", direction: "", text: "Dawn light washes over the skyline as the city slowly wakes." },
-    { index: 1, speaker: "Daniel", voice: "daniel", direction: "", text: "Harbors reopen and ferries trace white lines across the bay." },
-    { index: 2, speaker: "Autumn", voice: "autumn", direction: "", text: "Markets fill with bread and flowers while trains sing underground." },
-    { index: 3, speaker: "Daniel", voice: "daniel", direction: "", text: "By noon the towers glow, drones stitching parcels between them." },
-    { index: 4, speaker: "Autumn", voice: "autumn", direction: "", text: "And by dusk the whole grid hums — a city dreaming in amber." },
+    { index: 0, speaker: "Heart", voice: "af_heart", direction: "", text: "Dawn light washes over the skyline as the city slowly wakes." },
+    { index: 1, speaker: "Adam", voice: "am_adam", direction: "thoughtful", text: "It's the first time we've seen this kind of atmospheric anomaly on record." },
+    { index: 2, speaker: "Heart", voice: "af_heart", direction: "", text: "Markets fill with bread and flowers while trains sing underground." },
+    { index: 3, speaker: "Adam", voice: "am_adam", direction: "urgent", text: "Look closely at the data — the pressure drop is almost vertical here." },
+    { index: 4, speaker: "Heart", voice: "af_heart", direction: "", text: "And by dusk the whole grid hums — a city dreaming in amber." },
   ],
   estimated_seconds: 26,
 };

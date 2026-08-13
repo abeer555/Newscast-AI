@@ -34,7 +34,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       }
       if (e.status === "failed") pushToast(`Generation failed: ${e.stageLabel}`, "bad");
     });
-    return () => es.close();
+      es.addEventListener("model_api", (ev) => {
+        const e = JSON.parse(ev.data);
+        if (e.status === "pending") {
+          useStore.getState().trackApiStart(e.id, e.name);
+        } else {
+          useStore.getState().trackApiEnd(e.id, e.status, e.ms);
+        }
+      });
+      return () => es.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -67,6 +75,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <main className="main">{children}</main>
       <Toasts />
+      <ApiTracker />
     </div>
   );
 }
@@ -90,3 +99,21 @@ function WavesIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="curre
 function MicIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>; }
 function ChartIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/></svg>; }
 function SlidersIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></svg>; }
+
+function ApiTracker() {
+  const apiRequests = useStore((s) => s.apiRequests);
+  if (!apiRequests || apiRequests.length === 0) return null;
+  return (
+    <div style={{ position: "fixed", bottom: 16, left: 16, background: "rgba(10,10,10,0.8)", backdropFilter: "blur(12px)", border: "1px solid var(--line-soft)", padding: "12px 14px", borderRadius: 12, fontSize: 11, zIndex: 9999, width: 280, display: "flex", flexDirection: "column", gap: 6, maxHeight: "35vh", overflowY: "auto", pointerEvents: "auto" }}>
+      <div style={{ fontWeight: 600, color: "var(--text-3)", letterSpacing: 1.2, textTransform: "uppercase", fontSize: 10, marginBottom: 4 }}>Model API Tracker</div>
+      {apiRequests.map(r => (
+        <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontFamily: "var(--font-mono)" }}>
+          <span style={{ color: r.status === "error" ? "var(--bad)" : "var(--text)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", flex: 1, paddingRight: 8 }}>{r.url}</span>
+          <span style={{ color: r.status === "pending" ? "var(--warm)" : r.status === "error" ? "var(--bad)" : "var(--good)", flexShrink: 0 }}>
+            {r.status === "pending" ? "…" : `${r.ms}ms`}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}

@@ -116,7 +116,7 @@ function migrate(db: Database.Database) {
       id TEXT PRIMARY KEY DEFAULT 'local',
       interests TEXT DEFAULT '[]',        -- JSON array of topic strings
       preferred_language TEXT DEFAULT 'en',
-      preferred_voice TEXT DEFAULT 'autumn',
+      preferred_voice TEXT DEFAULT 'af_heart',
       updated_at INTEGER
     );
 

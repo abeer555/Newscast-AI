@@ -8,11 +8,11 @@ for (const name of [".env.local", ".env"]) {
   }
 }
 async function main() {
-  const { groq } = await import("../lib/groq");
+  const { kokoroTTS } = await import("../lib/kokoro");
   try {
-    const res = await groq().audio.speech.create({ model: "canopylabs/orpheus-v1-english", voice: "autumn", input: "Budget probe.", response_format: "wav" });
-    const buf = Buffer.from(await res.arrayBuffer());
-    console.log("TTS OK", buf.length, "bytes");
+    const start = Date.now();
+    const buf = await kokoroTTS({ text: "Budget probe. Kokoro is online.", voice: "af_heart" });
+    console.log(`TTS OK: ${buf.length} bytes generated in ${Date.now() - start}ms`);
   } catch (e) {
     console.log("TTS FAIL:", String(e).slice(0, 260));
   }

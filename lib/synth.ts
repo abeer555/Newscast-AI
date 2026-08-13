@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { groq } from "./groq";
+import { kokoroTTS } from "./kokoro";
 import { TTS_MODELS } from "./sources";
 import { getDb } from "./db";
 import { PodcastScript } from "./scriptgen";
@@ -25,20 +25,12 @@ export function chunkForTTS(text: string): string[] {
 }
 
 async function ttsChunk(text: string, voice: string, language: "en" | "ar"): Promise<Buffer> {
-  const model = TTS_MODELS[language];
-  const start = Date.now();
-  let res: Awaited<ReturnType<typeof groq.prototype.audio.speech.create>>;
-  try {
-    res = await groq().audio.speech.create({ model, voice, input: text, response_format: "wav" });
-  } catch (e) {
-    // Arabic pool shares the daily budget on this key — fall back to the English voice model so Arabic episodes still ship audio
-    if (language === "ar" && String(e).includes("model_terms_required")) {
-      res = await groq().audio.speech.create({ model: TTS_MODELS.en, voice: "hannah", input: text, response_format: "wav" });
-    } else {
-      throw e;
-    }
+  if (language === "ar" || TTS_MODELS[language] === null) {
+    throw new Error("Arabic TTS is not supported with the local Kokoro backend.");
   }
-  const buf = Buffer.from(await res.arrayBuffer());
+  const model = TTS_MODELS[language] ?? "kokoro/local";
+  const start = Date.now();
+  const buf = await kokoroTTS({ text, voice, speed: 1.0 });
   try {
     getDb().prepare("INSERT INTO analytics_events (kind, model, latency_ms, meta, created_at) VALUES ('tts_call',?,?,?,?)")
       .run(model, Date.now() - start, JSON.stringify({ chars: text.length, voice }), Date.now());
@@ -98,7 +90,12 @@ export async function synthesizeEpisode(opts: {
   script: PodcastScript;
   language: "en" | "ar";
   onProgress?: (done: number, total: number) => void;
-}): Promise<{ audioPath: string; durationSec: number; segmentCount: number }> {
+}): Promise<{ audioPath: string | null; durationSec: number; segmentCount: number }> {
+  // Arabic is not supported by the local Kokoro backend — return early with no audio.
+  if (opts.language === "ar") {
+    return { audioPath: null, durationSec: opts.script.estimated_seconds, segmentCount: opts.script.segments.length };
+  }
+
   const buffers: Buffer[] = [];
 
   // Merge consecutive same-voice segments into ~190-char utterances to minimize API calls.
@@ -106,8 +103,7 @@ export async function synthesizeEpisode(opts: {
   const merged: { text: string; voice: string }[] = [];
   let cur: { text: string; voice: string } | null = null;
   for (const seg of opts.script.segments) {
-    const dir = seg.direction && opts.language === "en" ? `[${seg.direction}] ` : "";
-    const piece = dir + seg.text; // this is what actually gets voiced
+    const piece = seg.text; // Kokoro reads out brackets, so we only send the raw text
     if (!seg.text.trim()) continue;
     if (cur && cur.voice === seg.voice) {
       const next = cur.text + (cur.text ? " " : "") + piece;
@@ -142,10 +138,10 @@ export async function synthesizeEpisode(opts: {
   return { audioPath: `/audio/${file}`, durationSec: Math.round(durationSec * 10) / 10, segmentCount: opts.script.segments.length };
 }
 
-export class TTSTermsError extends Error {
-  constructor(public modelId: string) {
-    super(`TERMS_REQUIRED:${modelId}`);
-    this.name = "TTSTermsError";
+export class TTSUnsupportedError extends Error {
+  constructor(public language: string) {
+    super(`TTS is not supported for language: ${language}`);
+    this.name = "TTSUnsupportedError";
   }
 }
 
@@ -154,17 +150,9 @@ async function retryTTS(text: string, voice: string, language: "en" | "ar", atte
     return await ttsChunk(text, voice, language);
   } catch (e) {
     const msg = String(e);
-    // terms acceptance is not retryable — surface it fast and distinctly
-    if (msg.includes("model_terms_required") || msg.includes("requires terms acceptance")) {
-      const m = msg.match(/model `([^`]+)`/) ?? msg.match(/model=([a-z0-9%/-]+)/i);
-      throw new TTSTermsError(m?.[1] ?? TTS_MODELS[language]);
-    }
-    // Rate limit: honor the retry window (parse "try again in Xs" / "XmYs")
-    const rl = msg.match(/try again in (?:(\d+)m)?\s*(?:([\d.]+)s)?/i);
-    if (/rate limit|429|tokens per day/i.test(msg) && attempt < 14) {
-      let wait = 20_000;
-      if (rl) wait = Math.min(5 * 60_000, (parseInt(rl[1] ?? "0") * 60 + parseFloat(rl[2] ?? "20")) * 1000 + 1500);
-      await new Promise((r) => setTimeout(r, wait));
+    // Kokoro server temporarily unavailable — back off and retry
+    if (/ECONNREFUSED|unreachable|fetch failed/i.test(msg) && attempt < 5) {
+      await new Promise((r) => setTimeout(r, 2_000 * (attempt + 1)));
       return retryTTS(text, voice, language, attempt + 1);
     }
     if (attempt < 3) {
