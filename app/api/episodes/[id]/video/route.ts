@@ -24,6 +24,10 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   if (ep.video_status === "queued" || ep.video_status === "storyboard" || ep.video_status === "rendering") {
     return NextResponse.json({ error: "video already in progress", video_status: ep.video_status }, { status: 409 });
   }
+  const body = await _req.json().catch(() => ({}));
+  const videoMode = body.video_mode === "article_images" ? "article_images" : "local";
+  db.prepare("UPDATE episodes SET video_mode=? WHERE id=?").run(videoMode, id);
+
   const ok = enqueueVideoRender(id);
   if (!ok) return NextResponse.json({ error: "render queue busy" }, { status: 409 });
   return NextResponse.json({ ok: true, video_status: "queued" });

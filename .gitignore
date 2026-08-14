@@ -9,3 +9,4 @@ public/audio/
 next-env.d.ts
 .*
 *.md
+!README.md

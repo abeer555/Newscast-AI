@@ -102,6 +102,7 @@ function migrate(db: Database.Database) {
       video_duration REAL,
       video_status TEXT,        -- pending | storyboard | rendering | ready | failed
       video_error TEXT,
+      video_mode TEXT DEFAULT 'local', -- local | article_images
       evaluation TEXT,          -- JSON evaluation blob
       generation_cache TEXT,    -- JSON of request that produced the episode (idempotency)
       play_count INTEGER DEFAULT 0,
@@ -191,6 +192,11 @@ function migrate(db: Database.Database) {
       decided_at INTEGER NOT NULL
     );
   `);
+
+  // ensure video_mode column exists on pre-existing DBs (ALTER TABLE is idempotent via try/catch)
+  try {
+    db.exec("ALTER TABLE episodes ADD COLUMN video_mode TEXT DEFAULT 'local'");
+  } catch { /* column already exists — safe to ignore */ }
 
   seedSources(db);
 }

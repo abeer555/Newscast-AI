@@ -30,7 +30,7 @@ interface Episode {
   id: string; cluster_id: string; title: string; format: string; language: "en" | "ar"; status: string; progress: number; stage_label: string;
   error: string | null; script: Script | null; audio_path: string | null; audio_duration: number | null; evaluation: Evaluation | null;
   created_at: number; script_model: string | null; play_count: number;
-  video_status: string | null; video_path: string | null; video_duration: number | null; video_error: string | null;
+  video_status: string | null; video_path: string | null; video_duration: number | null; video_error: string | null; video_mode?: "local" | "article_images";
   storyboard: { beats: { index: number; image_prompt: string; caption: string; duration: number; frame_path?: string }[]; total_duration: number } | null;
 }
 
@@ -45,6 +45,7 @@ export default function StudioPage() {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"script" | "listen" | "watch" | "review">("script");
   const [videoBusy, setVideoBusy] = useState(false);
+  const [videoMode, setVideoMode] = useState<"local" | "article_images">("local");
   const [showLangPicker, setShowLangPicker] = useState(false);
 
   const load = async () => {
@@ -64,8 +65,8 @@ export default function StudioPage() {
   const renderVideo = async () => {
     setVideoBusy(true);
     try {
-      await api(`/api/episodes/${id}/video`, { method: "POST" });
-      pushToast("Video render queued — this uses your local GPU heavily", "good");
+      await api(`/api/episodes/${id}/video`, { method: "POST", body: JSON.stringify({ video_mode: videoMode }) });
+      pushToast(`Video render queued (${videoMode === "local" ? "AI imagery" : "Article images"})`, "good");
     } catch (e) {
       pushToast(String(e), "bad");
     } finally {
@@ -305,8 +306,14 @@ export default function StudioPage() {
               <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, fontSize: 13 }} className="muted">
                 <span className="chip good">✓ video ready</span>
                 {ep.video_duration ? <span>{fmtDuration(ep.video_duration)}</span> : null}
-                {ep.storyboard ? <span>{ep.storyboard.beats.length} beats · Z-Image-Turbo 1280×720</span> : null}
-                <button className={`btn sm ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy} style={{ marginLeft: "auto" }}>Re-render</button>
+                {ep.storyboard ? <span>{ep.storyboard.beats.length} beats · {ep.video_mode === "article_images" ? "Scraped Images" : "Z-Image-Turbo 1280×720"}</span> : null}
+                <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <select className="btn sm" style={{ background: "var(--bg-2)" }} value={videoMode} onChange={(e) => setVideoMode(e.target.value as "local" | "article_images")}>
+                    <option value="local">AI Video (ComfyUI)</option>
+                    <option value="article_images">Direct Article Images</option>
+                  </select>
+                  <button className={`btn sm ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy}>Re-render</button>
+                </div>
               </div>
               {ep.storyboard && (
                 <div className="card pad" style={{ marginTop: 14 }}>
@@ -340,7 +347,11 @@ export default function StudioPage() {
               <div style={{ fontSize: 40, marginBottom: 10 }}>🎞</div>
               <div className="muted" style={{ marginBottom: 8 }}>Video render failed.</div>
               <div className="mono dim" style={{ fontSize: 12, marginBottom: 14, maxWidth: 560, marginInline: "auto", wordBreak: "break-word" }}>{ep.video_error}</div>
-              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
+                <select className="btn sm" style={{ background: "var(--bg-2)" }} value={videoMode} onChange={(e) => setVideoMode(e.target.value as "local" | "article_images")}>
+                  <option value="local">AI Video (ComfyUI)</option>
+                  <option value="article_images">Direct Article Images</option>
+                </select>
                 <button className={`btn sm ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy}>Try again</button>
                 <a className="btn sm" href={`/api/episodes/${id}/video`} target="_blank" rel="noreferrer">raw status</a>
               </div>
@@ -357,7 +368,13 @@ export default function StudioPage() {
                   : "Synthesize the audio first — the video uses the narration as its master clock."}
               </div>
               {ep.audio_path && (
-                <button className={`btn primary ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy}>Render video</button>
+                <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center" }}>
+                  <select className="btn" style={{ background: "var(--bg-2)", padding: "10px 14px", fontSize: 14, borderRadius: 10 }} value={videoMode} onChange={(e) => setVideoMode(e.target.value as "local" | "article_images")}>
+                    <option value="local">AI Generated Images (ComfyUI)</option>
+                    <option value="article_images">Use Scraped Article Images</option>
+                  </select>
+                  <button className={`btn primary ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy}>Render video</button>
+                </div>
               )}
             </div>
           )}

@@ -28,23 +28,12 @@ export const STYLE_BLOCK =
 export const NEGATIVE_BLOCK =
   "text, words, letters, captions, subtitles, headlines, signage, logos, watermarks, ANY typography, low quality, blurry, bad anatomy, extra digits, gore, nsfw, deformed";
 
-/**
- * Stage 1 of the video pipeline — "how should the video look".
- * Groups the narration into visual beats balanced by word load, then asks the
- * frontier model to direct one cinematic shot per beat. Beat screen time is
- * allocated in proportion to the words it covers so pacing follows the voice.
- */
-export async function planStoryboard(
-  script: PodcastScript,
-  intel: StoryIntelligence | null,
-  opts?: { maxBeats?: number }
-): Promise<Storyboard> {
+export function groupScriptIntoBeats(script: PodcastScript, opts?: { maxBeats?: number }) {
   const wordsPerSeg = script.segments.map((s) => s.text.split(/\s+/).length);
   const totalWords = Math.max(1, wordsPerSeg.reduce((a, b) => a + b, 0));
   const estSeconds = script.estimated_seconds || Math.round(totalWords / 1.55);
   const targetBeats = Math.min(opts?.maxBeats ?? 14, Math.max(6, Math.round(estSeconds / 7)));
 
-  // greedy contiguous grouping balanced by word load
   const groups: { segs: number[]; words: number }[] = [];
   const perBeat = totalWords / targetBeats;
   let cur: number[] = [];
@@ -58,6 +47,15 @@ export async function planStoryboard(
     }
   });
   if (cur.length) groups.push({ segs: cur, words: curWords });
+  return { groups, totalWords, estSeconds };
+}
+
+export async function planStoryboard(
+  script: PodcastScript,
+  intel: StoryIntelligence | null,
+  opts?: { maxBeats?: number }
+): Promise<Storyboard> {
+  const { groups, totalWords, estSeconds } = groupScriptIntoBeats(script, opts);
 
   const beatLines = groups
     .map((g, i) => `BEAT ${i + 1} (segments ${g.segs[0]}–${g.segs[g.segs.length - 1]}):\n${g.segs.map((j) => script.segments[j].text).join(" ")}`)
@@ -96,6 +94,42 @@ export async function planStoryboard(
 
   return { style: STYLE_BLOCK, aspect: "16:9", beats, total_duration: Math.round(acc * 10) / 10 };
 }
+
+export function planStoryboardFromArticles(
+  script: PodcastScript,
+  imageUrls: string[],
+  opts?: { maxBeats?: number }
+): Storyboard {
+  const { groups, totalWords, estSeconds } = groupScriptIntoBeats(script, opts);
+  
+  const beats: Beat[] = groups.map((g, i) => {
+    const share = g.words / totalWords;
+    const duration = Math.min(4.5, Math.max(1.5, Math.round(share * estSeconds * 10) / 10));
+    const firstSegment = script.segments[g.segs[0]]?.text || "";
+    const caption = firstSegment.split(/\s+/).slice(0, 5).join(" ").slice(0, 64);
+    // Determine which image to use (cycle if we have fewer images than beats)
+    const imgIndex = imageUrls.length > 0 ? i % imageUrls.length : 0;
+    const framePath = imageUrls.length > 0 ? imageUrls[imgIndex] : "";
+    
+    return {
+      index: i,
+      image_prompt: "",
+      negative_prompt: "",
+      caption,
+      duration,
+      segment_range: [g.segs[0], g.segs[g.segs.length - 1]],
+      frame_path: framePath,
+    } as Beat & { frame_path: string };
+  });
+
+  const totalPlanned = beats.reduce((a, b) => a + b.duration, 0);
+  const scale = estSeconds / Math.max(0.1, totalPlanned);
+  let acc = 0;
+  for (const b of beats) { b.duration = Math.max(1.2, Math.round(b.duration * scale * 10) / 10); acc += b.duration; }
+
+  return { style: "article_images", aspect: "16:9", beats, total_duration: Math.round(acc * 10) / 10 };
+}
+
 
 /** Per-segment timestamps from real audio, so captions switch exactly when the voice moves on. */
 export function segmentTimeline(script: PodcastScript, totalAudioSec: number): { start: number; end: number; text: string; speaker: string }[] {

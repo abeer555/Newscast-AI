@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
-import { api, useStore, timeAgo } from "@/lib/store";
+import { api, useStore, timeAgo, useInterval } from "@/lib/store";
 import AudioPlayer from "@/components/AudioPlayer";
 
 interface Article { id: string; title: string; summary: string; url: string; author: string | null; published_at: number; image_url: string | null; source_name: string; lean: string; country: string; similarity: number; }
@@ -46,13 +46,13 @@ interface Evidence {
 
 export default function StoryPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
   const pushToast = useStore((s) => s.pushToast);
   const [story, setStory] = useState<Story | null>(null);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
   const [tab, setTab] = useState<"intel" | "framing" | "timeline" | "coverage" | "evidence">("intel");
+  const [activeEpisodeIds, setActiveEpisodeIds] = useState<string[]>([]);
 
   const load = async () => {
     setStory(await api<Story>(`/api/stories/${id}`));
@@ -97,21 +97,20 @@ export default function StoryPage() {
           <button className="btn primary" onClick={() => (intel ? setGenOpen(true) : pushToast("Run intelligence first for a grounded script", "info"))}>
             ✦ Produce podcast
           </button>
+          {story.episodes.some((e) => e.status !== "ready" && e.status !== "failed") && (
+            <Link href={`/studio/${story.episodes.find((e) => e.status !== "ready" && e.status !== "failed")?.id}`} target="_blank" className="btn sm" style={{ alignSelf: "center" }}>
+              Studio ↗
+            </Link>
+          )}
         </div>
       </div>
 
-      {story.episodes.filter((e) => e.status === "ready").length > 0 && (
+      {story.episodes.length > 0 && (
         <div className="card pad" style={{ marginBottom: 18 }}>
           <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 12 }}>Episodes from this story</div>
-          <div style={{ display: "grid", gap: 10 }}>
-            {story.episodes.filter((e) => e.status === "ready").map((e) => (
-              <Link key={e.id} href={`/studio/${e.id}`} className="card pad" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--panel-2)" }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14.5 }}>{e.title}</div>
-                  <div className="dim" style={{ fontSize: 12, marginTop: 3 }}>{e.format} · {e.language.toUpperCase()}</div>
-                </div>
-                <span className="chip good">▶ ready</span>
-              </Link>
+          <div style={{ display: "grid", gap: 8 }}>
+            {story.episodes.map((e) => (
+              <EpisodeStrip key={e.id} episodeId={e.id} initialEpisode={e} />
             ))}
           </div>
         </div>
@@ -351,7 +350,7 @@ export default function StoryPage() {
         </div>
       )}
 
-      {genOpen && <GenerateModal clusterId={story.id} onClose={() => setGenOpen(false)} onGo={(id) => router.push(`/studio/${id}`)} />}
+      {genOpen && <GenerateModal clusterId={story.id} onClose={() => setGenOpen(false)} onGo={(newId) => { setActiveEpisodeIds((prev) => [...prev, newId]); void load(); }} />}
     </div>
   );
 }
@@ -375,8 +374,9 @@ export function GenerateModal({ clusterId, onClose, onGo }: { clusterId: string;
     setBusy(true);
     try {
       const { id } = await api<{ id: string }>("/api/episodes", { method: "POST", body: JSON.stringify({ clusterId, format, language, style: "conversational" }) });
-      pushToast("Pipeline started — writing script", "good");
+      pushToast("Pipeline started — writing script. Watch progress below.", "good");
       onGo(id);
+      onClose();
     } catch (e) { pushToast(`${e}`, "bad"); setBusy(false); }
   };
 
@@ -429,6 +429,46 @@ export function GenerateModal({ clusterId, onClose, onGo }: { clusterId: string;
         <button className={`btn primary ${busy ? "loading" : ""}`} style={{ width: "100%", justifyContent: "center", padding: 13 }} onClick={go} disabled={busy}>
           {busy ? "Starting" : "Generate episode"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function EpisodeStrip({ episodeId, initialEpisode }: { episodeId: string; initialEpisode: EpisodeLite }) {
+  const [ep, setEp] = useState<EpisodeLite & { progress?: number; stage_label?: string }>(initialEpisode);
+  const running = !["ready", "failed"].includes(ep.status);
+  useInterval(async () => {
+    try {
+      const fresh = await api<EpisodeLite & { progress: number; stage_label: string }>(`/api/episodes/${episodeId}`);
+      setEp(fresh);
+    } catch { /* ignore */ }
+  }, running ? 2500 : null);
+
+  const pct = Math.round(((ep as { progress?: number }).progress ?? 0) * 100);
+  const statusColor = ep.status === "ready" ? "var(--good)" : ep.status === "failed" ? "var(--bad)" : "var(--warm)";
+  const statusLabel = ep.status === "ready" ? "✓ ready" : ep.status === "failed" ? "✕ failed" : (ep as { stage_label?: string }).stage_label ?? ep.status;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--panel-2)", borderRadius: 10, border: "1px solid var(--line-soft)" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {ep.title && ep.title !== "Generating\u2026" ? ep.title : `${ep.format} · ${ep.language.toUpperCase()}`}
+        </div>
+        <div className="dim" style={{ fontSize: 11.5, marginTop: 2 }}>{ep.format} · {ep.language.toUpperCase()}</div>
+        {running && (
+          <div style={{ marginTop: 6 }}>
+            <div className="progress-track" style={{ height: 4 }}>
+              <div className="progress-fill" style={{ width: `${pct}%`, transition: "width 0.5s ease" }} />
+            </div>
+            <div className="mono dim" style={{ fontSize: 10.5, marginTop: 3 }}>{statusLabel}</div>
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        <span style={{ fontSize: 12, color: statusColor, fontWeight: 600 }}>{ep.status === "ready" ? "✓ ready" : running ? "●" : "✕"}</span>
+        <Link href={`/studio/${episodeId}`} target="_blank" className="btn sm" style={{ fontSize: 12 }}>
+          Open studio ↗
+        </Link>
       </div>
     </div>
   );

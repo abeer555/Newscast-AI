@@ -7,7 +7,7 @@ import { synthesizeEpisode } from "./synth";
 import { chatJson } from "./chat";
 import { episodeProgress, logEvent } from "./bus";
 import { enqueueVideoRender } from "./videoQueue";
-import { planStoryboard, Storyboard, Beat } from "./storyboard";
+import { planStoryboard, planStoryboardFromArticles, Storyboard, Beat } from "./storyboard";
 import { StoryIntelligence } from "./intelligence";
 import { comfyAvailable, generateImage } from "./comfyui";
 import { renderEpisodeVideo } from "./video";
@@ -305,15 +305,28 @@ export async function resumeEpisode(episodeId: string): Promise<void> {
  */
 export async function renderEpisodeVideoJob(episodeId: string): Promise<void> {
   const db = getDb();
-  const ep = db.prepare("SELECT id, cluster_id, script, audio_path, audio_duration, format FROM episodes WHERE id=?").get(episodeId) as
-    | { id: string; cluster_id: string; script: string | null; audio_path: string | null; audio_duration: number | null; format: string }
+  const ep = db.prepare("SELECT id, cluster_id, script, audio_path, audio_duration, format, video_mode FROM episodes WHERE id=?").get(episodeId) as
+    | { id: string; cluster_id: string; script: string | null; audio_path: string | null; audio_duration: number | null; format: string; video_mode?: string }
     | undefined;
   if (!ep?.script || !ep.audio_path) throw new Error("video needs a script + synthesized audio");
 
   const script = JSON.parse(ep.script) as PodcastScript;
   const cl = db.prepare("SELECT intelligence FROM clusters WHERE id=?").get(ep.cluster_id) as { intelligence: string | null } | undefined;
   const intel = cl?.intelligence ? (JSON.parse(cl.intelligence) as StoryIntelligence) : null;
-  await renderVideoForEpisode(episodeId, script, intel, ep.audio_duration ?? script.estimated_seconds, ep.format === "reel");
+  await renderVideoForEpisode(episodeId, script, intel, ep.audio_duration ?? script.estimated_seconds, ep.format === "reel", ep.video_mode || "local");
+}
+
+async function downloadImage(url: string, destPath: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { timeout: 10000 } as RequestInit);
+    if (!res.ok) return false;
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    fs.writeFileSync(destPath, buffer);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function renderVideoForEpisode(
@@ -322,57 +335,98 @@ async function renderVideoForEpisode(
   intel: StoryIntelligence | null,
   audioDurationSec: number,
   isReel = false,
+  videoMode = "local",
 ): Promise<void> {
   const db = getDb();
 
-  if (!(await comfyAvailable())) {
-    setEpisode(episodeId, { video_status: "failed", video_error: `ComfyUI not reachable at ${process.env.COMFYUI_URL ?? "http://127.0.0.1:8188"}` });
-    throw new Error("ComfyUI offline — start it and press Render video");
-  }
 
   // 1. how should the video look
   emit(episodeId, "rendering_video", 0.80, "Designing storyboard");
   setEpisode(episodeId, { video_status: "storyboard" });
-  const board: Storyboard = await planStoryboard(script, intel);
   const epCluster = (db.prepare("SELECT cluster_id FROM episodes WHERE id=?").get(episodeId) as { cluster_id: string }).cluster_id;
 
-  // ─── evidence-aware visual plan ────────────────────────────────────────
-  // Attach each beat to claims, rewrite the prompt so the visual matches
-  // the evidence shape (map/data/sourced/archival for non-narrative beats).
-  const facts = db.prepare("SELECT * FROM cluster_facts WHERE cluster_id=?").all(epCluster) as VerifiedFact[];
-  let visualPlan: VisualPlan | null = null;
-  if (facts.length) {
-    try {
-      visualPlan = await planEvidenceVisuals({ beats: board.beats, segments: script.segments, facts, intel });
-      logEvent("pipeline", `Visual plan for ${episodeId}: ${visualPlan.beats.map((b) => b.mode).join("/")}`);
-      // Overlay planner's prompt back onto the storyboard beats — match by INDEX even
-      // if the model 1-indexes its return (common LLM quirk).
-      const n = board.beats.length;
-      const beatsAreOneIndexed = visualPlan.beats.length > 0 && visualPlan.beats.every((b) => b.beat_index >= 1 && b.beat_index <= n);
-      const shift = beatsAreOneIndexed ? 1 : 0;
-      for (const pv of visualPlan.beats) {
-        const idx = Math.max(0, Math.min(n - 1, pv.beat_index - shift));
-        if (board.beats[idx] && idx >= 0) {
-          board.beats[idx].image_prompt = pv.prompt;
-          (board.beats[idx] as Beat & { mode?: string; fact_ids?: string[] }).mode = pv.mode;
-          (board.beats[idx] as Beat & { fact_ids?: string[] }).fact_ids = pv.fact_ids;
-        }
-      }
+  // ── resolve storyboard ──────────────────────────────────────────────────
+  let board: Storyboard | undefined;
+
+  if (videoMode === "article_images") {
+    // Pull image URLs for all articles in the cluster
+    const articles = db
+      .prepare(
+        "SELECT image_url FROM articles JOIN cluster_articles ON articles.id = cluster_articles.article_id WHERE cluster_articles.cluster_id = ? AND image_url IS NOT NULL AND image_url != ''"
+      )
+      .all(epCluster) as { image_url: string }[];
+    const rawUrls = Array.from(new Set(articles.map((a) => a.image_url)));
+
+    // Download them to a local frames dir
+    const framesDir = path.join(process.cwd(), "data", "frames");
+    fs.mkdirSync(framesDir, { recursive: true });
+
+    const downloadedPaths: string[] = [];
+    for (let i = 0; i < rawUrls.length; i++) {
+      const p = path.join(framesDir, `${episodeId}_scraped_${i}.jpg`);
+      const ok = await downloadImage(rawUrls[i], p);
+      if (ok) downloadedPaths.push(p);
+    }
+
+    if (downloadedPaths.length > 0) {
+      board = planStoryboardFromArticles(script, downloadedPaths);
       setEpisode(episodeId, { storyboard: JSON.stringify(board) });
-    } catch (e) {
-      logEvent("error", `Visual plan failed: ${String(e)}`);
+      logEvent("pipeline", `Storyboard (article images): ${board.beats.length} beats / ${board.total_duration}s for ${episodeId}`);
+    } else {
+      // No images downloaded — fall back to local AI generation
+      logEvent("pipeline", `No article images downloaded for ${episodeId}, falling back to local AI generation`);
+      videoMode = "local";
     }
   }
-  logEvent("pipeline", `Storyboard: ${board.beats.length} beats / ${board.total_duration}s for ${episodeId}`);
+
+  if (videoMode === "local") {
+    if (!(await comfyAvailable())) {
+      setEpisode(episodeId, { video_status: "failed", video_error: `ComfyUI not reachable at ${process.env.COMFYUI_URL ?? "http://127.0.0.1:8188"}` });
+      throw new Error("ComfyUI offline — start it and press Render video");
+    }
+
+    board = await planStoryboard(script, intel);
+
+    // ─── evidence-aware visual plan ────────────────────────────────────────
+    const facts = db.prepare("SELECT * FROM cluster_facts WHERE cluster_id=?").all(epCluster) as VerifiedFact[];
+    if (facts.length) {
+      try {
+        const visualPlan = await planEvidenceVisuals({ beats: board.beats, segments: script.segments, facts, intel });
+        logEvent("pipeline", `Visual plan for ${episodeId}: ${visualPlan.beats.map((b) => b.mode).join("/")}`);
+        const n = board.beats.length;
+        const beatsAreOneIndexed = visualPlan.beats.length > 0 && visualPlan.beats.every((b) => b.beat_index >= 1 && b.beat_index <= n);
+        const shift = beatsAreOneIndexed ? 1 : 0;
+        for (const pv of visualPlan.beats) {
+          const idx = Math.max(0, Math.min(n - 1, pv.beat_index - shift));
+          if (board.beats[idx] && idx >= 0) {
+            board.beats[idx].image_prompt = pv.prompt;
+            (board.beats[idx] as Beat & { mode?: string; fact_ids?: string[] }).mode = pv.mode;
+            (board.beats[idx] as Beat & { fact_ids?: string[] }).fact_ids = pv.fact_ids;
+          }
+        }
+        setEpisode(episodeId, { storyboard: JSON.stringify(board) });
+      } catch (e) {
+        logEvent("error", `Visual plan failed: ${String(e)}`);
+      }
+    }
+    logEvent("pipeline", `Storyboard: ${board.beats.length} beats / ${board.total_duration}s for ${episodeId}`);
+  }
+
+  if (!board) throw new Error("Storyboard could not be built — no video mode resolved.");
 
   // 2. one frame per beat, sequential so the local GPU queue stays shallow
   const frames: string[] = [];
   for (let i = 0; i < board.beats.length; i++) {
     const b: Beat = board.beats[i];
-    emit(episodeId, "rendering_video", Math.round((0.82 + 0.10 * (i / board.beats.length)) * 100) / 100, `Frame ${i + 1}/${board.beats.length} — ${b.caption || "visual"}`);
-    const img = await generateImage({ prompt: b.image_prompt, negative: b.negative_prompt, width: 1280, height: 720, seed: hashSeed(`${episodeId}:${i}`), steps: 8 });
-    frames.push(img.filePath);
-    (board.beats[i] as Beat & { frame_path?: string }).frame_path = img.filePath;
+    if (videoMode === "local") {
+      emit(episodeId, "rendering_video", Math.round((0.82 + 0.10 * (i / board.beats.length)) * 100) / 100, `Frame ${i + 1}/${board.beats.length} — ${b.caption || "visual"}`);
+      const img = await generateImage({ prompt: b.image_prompt, negative: b.negative_prompt, width: 1280, height: 720, seed: hashSeed(`${episodeId}:${i}`), steps: 8 });
+      frames.push(img.filePath);
+      (board!.beats[i] as Beat & { frame_path?: string }).frame_path = img.filePath;
+    } else {
+      // In article_images mode, the frame_path is already populated
+      frames.push((b as Beat & { frame_path: string }).frame_path);
+    }
     setEpisode(episodeId, { storyboard: JSON.stringify(board) });
   }
   setEpisode(episodeId, { storyboard: JSON.stringify(board), video_status: "rendering" });
