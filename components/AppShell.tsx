@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useStore } from "@/lib/store";
@@ -16,9 +16,11 @@ const NAV = [
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
+  const [showDemoBanner, setShowDemoBanner] = useState(false);
   const { stats, refreshStats, ingestLog, pushToast } = useStore((s) => ({ stats: s.stats, refreshStats: s.refreshStats, ingestLog: s.ingestLog, pushToast: s.pushToast }));
 
   useEffect(() => {
+    setShowDemoBanner(window.location.hostname === "newscast.t0r.tech");
     refreshStats();
     const es = new EventSource("/api/stream");
     es.addEventListener("log", (ev) => {
@@ -48,6 +50,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="shell">
+      {showDemoBanner && (
+        <div className="demo-banner">
+          This is a live demo. Some features may not work when accessed from newscast.t0r.tech.
+        </div>
+      )}
       <aside className="side">
         <div className="brand">
           <div className="brand-mark">N</div>
