@@ -437,6 +437,8 @@ Newscast-AI/
 
 ## Getting Started
 
+> **📦 Deploying to Production?** See [`QUICK_FIX.md`](QUICK_FIX.md) for fixing database persistence issues and [`DEPLOYMENT.md`](DEPLOYMENT.md) for complete production deployment instructions.
+
 ### Prerequisites
 
 1. **Node.js**: `v20.0.0` or higher

@@ -3,10 +3,14 @@ import path from "path";
 import fs from "fs";
 import { seedDemoData } from "./demo";
 
-const DATA_DIR = process.env.VERCEL ? path.join("/tmp", "newscast-ai") : path.join(process.cwd(), "data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const dbPath = path.join(DATA_DIR, "newscast.db");
+// Allow custom database path via environment variable for production persistence
+// If DB_PATH is set, use it directly (e.g., /mnt/data/newscast.db)
+// Otherwise fall back to local data directory
+const dbPath = process.env.DB_PATH || (() => {
+  const DATA_DIR = process.env.VERCEL ? path.join("/tmp", "newscast-ai") : path.join(process.cwd(), "data");
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  return path.join(DATA_DIR, "newscast.db");
+})();
 
 const g = globalThis as unknown as { __newscastDb?: Database.Database };
 

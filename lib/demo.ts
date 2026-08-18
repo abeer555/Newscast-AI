@@ -34,6 +34,9 @@ function readStoryboard(): { style: string; aspect: string; beats: DemoBeat[]; t
 }
 
 export function seedDemoData(db: Database.Database) {
+  // Only seed demo data if explicitly enabled via environment variable
+  if (process.env.SEED_DEMO !== "true") return;
+  
   const counts = db.prepare("SELECT COUNT(*) c FROM clusters").get() as { c: number };
   if (counts.c > 0) return;
 
