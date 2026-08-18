@@ -359,7 +359,11 @@ async function renderVideoForEpisode(
 
     // Download them to a local frames dir
     const framesDir = path.join(process.cwd(), "data", "frames");
-    fs.mkdirSync(framesDir, { recursive: true });
+    try {
+      fs.mkdirSync(framesDir, { recursive: true });
+    } catch (e) {
+      // Read-only filesystem - skip downloading frames
+    }
 
     const downloadedPaths: string[] = [];
     for (let i = 0; i < rawUrls.length; i++) {

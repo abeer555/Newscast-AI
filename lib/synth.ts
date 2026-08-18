@@ -6,7 +6,12 @@ import { getDb } from "./db";
 import { PodcastScript, ScriptLanguage } from "./scriptgen";
 
 const AUDIO_DIR = path.join(process.cwd(), "public", "audio");
-if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
+// Try to create directory, but don't fail on read-only filesystems (e.g., Vercel)
+try {
+  if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
+} catch (e) {
+  // Read-only filesystem - audio files should already exist in git
+}
 
 /** Split text into <=190-char chunks on sentence/word boundaries (Orpheus hard limit: 200). */
 export function chunkForTTS(text: string): string[] {

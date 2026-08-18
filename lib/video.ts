@@ -19,7 +19,12 @@ import type { PodcastScript } from "./scriptgen";
 
 const run = promisify(execFile);
 const VIDEO_DIR = path.join(process.cwd(), "public", "video");
-if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR, { recursive: true });
+// Try to create directory, but don't fail on read-only filesystems (e.g., Vercel)
+try {
+  if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR, { recursive: true });
+} catch (e) {
+  // Read-only filesystem - video files should already exist in git
+}
 
 const FADE = 0.6;
 const MAX_FONTS = [
@@ -70,7 +75,12 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
   const framesDir = path.join(VIDEO_DIR, "tmp", opts.episodeId);
   // fresh workspace (stale xfade intermediates caused pinned first-beat bugs in the past)
   try { fs.rmSync(framesDir, { recursive: true, force: true }); } catch { /* first run */ }
-  fs.mkdirSync(framesDir, { recursive: true });
+  try {
+    fs.mkdirSync(framesDir, { recursive: true });
+  } catch (e) {
+    // Read-only filesystem - skip video generation on demo platform
+    throw new Error("Video generation not available on read-only platform (demo mode)");
+  }
 
   const board = opts.storyboard;
   const n = board.beats.length;

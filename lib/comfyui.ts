@@ -98,7 +98,11 @@ export async function generateImage(opts: GenImageOpts): Promise<{ filePath: str
   const imgRes = await fetch(`${COMFY_URL}/view?filename=${encodeURIComponent(filename)}&type=output`);
   if (!imgRes.ok) throw new Error(`Failed to fetch image ${filename}`);
   const buf = Buffer.from(await imgRes.arrayBuffer());
-  if (!fs.existsSync(FRAMES_DIR)) fs.mkdirSync(FRAMES_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(FRAMES_DIR)) fs.mkdirSync(FRAMES_DIR, { recursive: true });
+  } catch (e) {
+    // Read-only filesystem - skip frame generation
+  }
   const out = path.join(FRAMES_DIR, filename.replace(/^newscast/, `nc_${Date.now()}_${Math.floor(Math.random() * 999)}`));
   fs.writeFileSync(out, buf);
   const latencyMs = Date.now() - start;

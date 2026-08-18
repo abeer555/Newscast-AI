@@ -7,8 +7,12 @@ import { seedDemoData } from "./demo";
 // If DB_PATH is set, use it directly (e.g., /mnt/data/newscast.db)
 // Otherwise fall back to local data directory
 const dbPath = process.env.DB_PATH || (() => {
-  const DATA_DIR = process.env.VERCEL ? path.join("/tmp", "newscast-ai") : path.join(process.cwd(), "data");
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  const DATA_DIR = process.env.VERCEL ? path.join(process.cwd(), "data") : path.join(process.cwd(), "data");
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {
+    // Read-only filesystem (Vercel) - database should exist in git
+  }
   return path.join(DATA_DIR, "newscast.db");
 })();
 
@@ -16,10 +20,22 @@ const g = globalThis as unknown as { __newscastDb?: Database.Database };
 
 export function getDb(): Database.Database {
   if (!g.__newscastDb) {
-    const db = new Database(dbPath);
-    db.pragma("journal_mode = WAL");
-    db.pragma("foreign_keys = ON");
-    migrate(db);
+    const isReadOnly = process.env.VERCEL === "1" || process.env.READ_ONLY_DB === "true";
+    const db = new Database(dbPath, isReadOnly ? { readonly: true } : undefined);
+    
+    if (!isReadOnly) {
+      db.pragma("journal_mode = WAL");
+      db.pragma("foreign_keys = ON");
+      migrate(db);
+    } else {
+      // Read-only mode for demo/Vercel - just enable foreign keys
+      try {
+        db.pragma("foreign_keys = ON");
+      } catch (e) {
+        // Ignore pragma errors in strict read-only mode
+      }
+    }
+    
     g.__newscastDb = db;
   }
   return g.__newscastDb;

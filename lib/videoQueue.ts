@@ -17,7 +17,14 @@ export function enqueueVideoRender(episodeId: string): boolean {
 
   const worker = path.join(process.cwd(), "scripts", "video-worker.ts");
   const logDir = path.join(process.cwd(), "data", "logs");
-  fs.mkdirSync(logDir, { recursive: true });
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+  } catch (e) {
+    // Read-only filesystem - video rendering not available
+    db.prepare("UPDATE episodes SET video_status='failed', video_error=?, updated_at=? WHERE id=?")
+      .run("Video rendering not available on read-only platform (demo mode)", Date.now(), episodeId);
+    return false;
+  }
   const logFd = fs.openSync(path.join(logDir, `video-${episodeId}.log`), "a");
 
   const child = spawn("npx", ["tsx", worker, episodeId], {
