@@ -11,16 +11,21 @@ next-env.d.ts
 !README.md
 
 # Allow data directory and database
-!data/
-!data/newscast.db
-!data/newscast.db-shm
-!data/newscast.db-wal
-
+#!data/
+#!data/newscast.db
+#!data/newscast.db-shm
+#!data/newscast.db-wal
+#
 # Exclude only logs and frames, but include audio/video for demo
-data/logs/
-data/frames/
+#data/logs/
+#data/frames/
 
 # Allow public directory with audio/video for demo
-!public/
-!public/**
-public/frames/
+#!public/
+#!public/**
+#public/frames/o
+#
+#
+public/
+data/
+
