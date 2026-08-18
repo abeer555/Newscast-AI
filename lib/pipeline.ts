@@ -371,7 +371,7 @@ async function renderVideoForEpisode(
   let board: Storyboard | undefined;
 
   if (videoMode === "article_images") {
-    // Pull image URLs for all articles in the cluster
+    // Article images ONLY mode: scrape from articles, use web search fallback, NO AI generation
     const articles = db
       .prepare(
         "SELECT image_url FROM articles JOIN cluster_articles ON articles.id = cluster_articles.article_id WHERE cluster_articles.cluster_id = ? AND image_url IS NOT NULL AND image_url != ''"
@@ -379,29 +379,56 @@ async function renderVideoForEpisode(
       .all(epCluster) as { image_url: string }[];
     const rawUrls = Array.from(new Set(articles.map((a) => a.image_url)));
 
-    // Download them to a local frames dir
-    const framesDir = path.join(process.cwd(), "data", "frames");
-    try {
-      fs.mkdirSync(framesDir, { recursive: true });
-    } catch (e) {
-      // Read-only filesystem - skip downloading frames
-    }
+    logEvent("pipeline", `Found ${rawUrls.length} article images for ${episodeId}, validating quality...`);
 
-    const downloadedPaths: string[] = [];
-    for (let i = 0; i < rawUrls.length; i++) {
-      const p = path.join(framesDir, `${episodeId}_scraped_${i}.jpg`);
-      const ok = await downloadImage(rawUrls[i], p);
-      if (ok) downloadedPaths.push(p);
-    }
+    // Import the smart scraper
+    const { scrapeAndValidateImages } = await import("./imageScraper");
+    
+    // Calculate how many images we need
+    const estimatedBeats = Math.ceil(audioDurationSec / 5); // ~5 seconds per beat
+    const requiredImages = Math.min(estimatedBeats, 20); // Cap at 20
 
-    if (downloadedPaths.length > 0) {
-      board = planStoryboardFromArticles(script, downloadedPaths);
-      setEpisode(episodeId, { storyboard: JSON.stringify(board) });
-      logEvent("pipeline", `Storyboard (article images): ${board.beats.length} beats / ${board.total_duration}s for ${episodeId}`);
+    // Scrape and validate (with intelligent web search fallback via Groq Llama API)
+    const scrapeResult = await scrapeAndValidateImages(
+      rawUrls, 
+      episodeId, 
+      requiredImages,
+      40, // min quality score
+      script // pass script for intelligent web search fallback
+    );
+    const scrapedImages = scrapeResult.images;
+
+    if (scrapedImages.length >= 3) {
+      // Minimum threshold met - use scraped images ONLY
+      logEvent("pipeline", `✓ Found ${scrapedImages.length} quality images (${rawUrls.length} from articles, ${scrapedImages.length - rawUrls.length} from web search) - NO AI generation`);
+      
+      const scrapedPaths = scrapedImages.map(img => img.path);
+      board = planStoryboardFromArticles(script, scrapedPaths);
+      
+      // Mark ALL as article source (including web-searched ones)
+      for (let i = 0; i < board.beats.length; i++) {
+        board.beats[i].image_source = "article";
+        const srcImg = scrapedImages[i % scrapedImages.length];
+        if (srcImg) {
+          board.beats[i].quality_score = srcImg.quality_score;
+          (board.beats[i] as Beat & { original_url?: string }).original_url = srcImg.article_url;
+        }
+      }
+      
+      setEpisode(episodeId, { 
+        storyboard: JSON.stringify(board),
+        video_mode: "article_images" 
+      });
+      
+      logEvent("pipeline", `Storyboard (article images only): ${board.beats.length} beats using ${scrapedImages.length} real images (cycled)`);
     } else {
-      // No images downloaded — fall back to local AI generation
-      logEvent("pipeline", `No article images downloaded for ${episodeId}, falling back to local AI generation`);
-      videoMode = "local";
+      // Not enough images found - fail with clear message
+      const msg = `Only found ${scrapedImages.length} images (need minimum 3). Article images mode requires actual images from news sources.`;
+      setEpisode(episodeId, { 
+        video_status: "failed", 
+        video_error: msg 
+      });
+      throw new Error(msg);
     }
   }
 

@@ -217,6 +217,7 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
       "-map", "[vout]",
       "-map", `${audioInputIdx}:a`,
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+      "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-b:a", "160k",
       // cap at the audio's length instead of -shortest (aac+audio drift made -shortest truncate to ~1 clip)
       "-t", audioSec.toFixed(3),

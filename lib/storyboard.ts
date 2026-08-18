@@ -13,6 +13,10 @@ export interface Beat {
   duration: number;
   /** which script segments this beat covers (inclusive) */
   segment_range: [number, number];
+  /** image source metadata for hybrid mode */
+  image_source?: "article" | "ai_generated";
+  frame_path?: string;
+  quality_score?: number;
 }
 
 export interface Storyboard {
@@ -119,6 +123,7 @@ export function planStoryboardFromArticles(
       duration,
       segment_range: [g.segs[0], g.segs[g.segs.length - 1]],
       frame_path: framePath,
+      image_source: (framePath && i < imageUrls.length) ? "article" : "ai_generated", // Mark source
     } as Beat & { frame_path: string };
   });
 

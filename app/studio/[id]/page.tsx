@@ -31,7 +31,7 @@ interface Episode {
   error: string | null; script: Script | null; audio_path: string | null; audio_duration: number | null; evaluation: Evaluation | null;
   created_at: number; updated_at: number; script_model: string | null; play_count: number;
   video_status: string | null; video_path: string | null; video_duration: number | null; video_error: string | null; video_mode?: "local" | "article_images";
-  storyboard: { beats: { index: number; image_prompt: string; caption: string; duration: number; frame_path?: string }[]; total_duration: number } | null;
+  storyboard: { beats: { index: number; image_prompt: string; caption: string; duration: number; frame_path?: string; image_source?: "article" | "ai_generated"; quality_score?: number; original_url?: string }[]; total_duration: number } | null;
 }
 
 const DIRECTIONS = ["", "cheerful", "warm", "casual", "serious", "thoughtful", "curious", "professionally", "authoritatively", "excited", "urgent", "somber", "deadpan", "whisper"];
@@ -314,31 +314,81 @@ export default function StudioPage() {
           {ep.video_path ? (
             <>
               <div className="card pad" style={{ padding: 8, background: "black" }}>
-                <video key={ep.video_path} controls playsInline preload="metadata" style={{ width: "100%", borderRadius: 10, display: "block" }} src={`${ep.video_path}?v=${ep.video_duration ?? Date.now()}`} />
+                <video key={ep.video_path} controls playsInline preload="metadata" style={{ width: "100%", borderRadius: 10, display: "block" }} src={`${ep.video_path}?v=${ep.updated_at}`} />
               </div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, fontSize: 13 }} className="muted">
                 <span className="chip good">✓ video ready</span>
                 {ep.video_duration ? <span>{fmtDuration(ep.video_duration)}</span> : null}
-                {ep.storyboard ? <span>{ep.storyboard.beats.length} beats · {ep.video_mode === "article_images" ? "Scraped Images" : "Z-Image-Turbo 1280×720"}</span> : null}
+                {ep.storyboard ? (() => {
+                  const articleCount = ep.storyboard.beats.filter(b => b.image_source === "article").length;
+                  const aiCount = ep.storyboard.beats.filter(b => b.image_source === "ai_generated").length;
+                  if (articleCount > 0 && aiCount > 0) {
+                    return <span>{ep.storyboard.beats.length} beats · Hybrid: {articleCount} article + {aiCount} AI</span>;
+                  } else if (articleCount > 0) {
+                    return <span>{ep.storyboard.beats.length} beats · Article Images</span>;
+                  } else {
+                    return <span>{ep.storyboard.beats.length} beats · {ep.video_mode === "article_images" ? "Article Images" : "Z-Image-Turbo 1280×720"}</span>;
+                  }
+                })() : null}
                 <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                   <select className="btn sm" style={{ background: "var(--bg-2)" }} value={videoMode} onChange={(e) => setVideoMode(e.target.value as "local" | "article_images")}>
-                    <option value="local">AI Video (ComfyUI)</option>
-                    <option value="article_images">Direct Article Images</option>
+                    <option value="local">🎨 AI Generated Images (ComfyUI)</option>
+                    <option value="article_images">📰 Real Images Only (No AI)</option>
                   </select>
                   <button className={`btn sm ${videoBusy ? "loading" : ""}`} onClick={renderVideo} disabled={videoBusy}>Re-render</button>
                 </div>
               </div>
               {ep.storyboard && (
                 <div className="card pad" style={{ marginTop: 14 }}>
-                  <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 10 }}>Storyboard — how the video looks</div>
+                  <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 10 }}>
+                    Storyboard — how the video looks
+                    {ep.storyboard.beats.some(b => b.image_source) && (() => {
+                      const articleCount = ep.storyboard.beats.filter(b => b.image_source === "article").length;
+                      const aiCount = ep.storyboard.beats.filter(b => b.image_source === "ai_generated").length;
+                      return articleCount > 0 || aiCount > 0 ? (
+                        <span style={{ marginLeft: 10, color: "var(--accent)", fontWeight: 500, textTransform: "none", fontSize: 11 }}>
+                          {articleCount > 0 && <span>📰 {articleCount} from articles</span>}
+                          {articleCount > 0 && aiCount > 0 && <span> · </span>}
+                          {aiCount > 0 && <span>🎨 {aiCount} AI-generated</span>}
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10 }}>
                     {ep.storyboard.beats.map((b) => (
-                      <details key={b.index} style={{ background: "var(--panel-2)", borderRadius: 10, padding: 8 }}>
+                      <details key={b.index} style={{ background: "var(--panel-2)", borderRadius: 10, padding: 8, position: "relative" }}>
+                        {b.image_source && (
+                          <div style={{ 
+                            position: "absolute", 
+                            top: 4, 
+                            right: 4, 
+                            fontSize: 10, 
+                            padding: "2px 6px", 
+                            borderRadius: 4, 
+                            background: b.image_source === "article" ? "rgba(59, 130, 246, 0.15)" : "rgba(168, 85, 247, 0.15)",
+                            color: b.image_source === "article" ? "#3b82f6" : "#a855f7",
+                            fontWeight: 600
+                          }}>
+                            {b.image_source === "article" ? "📰 Article" : "🎨 AI"}
+                          </div>
+                        )}
                         <summary style={{ cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: "var(--accent)" }}>
                           {String(b.index + 1).padStart(2, "0")} · {b.caption || `Beat ${b.index + 1}`}
                         </summary>
-                        <p className="muted" style={{ fontSize: 11.5, lineHeight: 1.5, margin: "8px 0 0" }}>{b.image_prompt}</p>
+                        <p className="muted" style={{ fontSize: 11.5, lineHeight: 1.5, margin: "8px 0 0" }}>{b.image_prompt || b.caption}</p>
                         <div className="mono dim" style={{ fontSize: 10.5, marginTop: 6 }}>{b.duration}s on screen</div>
+                        {b.quality_score && (
+                          <div style={{ fontSize: 10, marginTop: 4, color: b.quality_score >= 70 ? "var(--good)" : b.quality_score >= 40 ? "var(--warm)" : "var(--bad)" }}>
+                            Quality: {b.quality_score}/100
+                          </div>
+                        )}
+                        {b.original_url && (
+                          <div style={{ fontSize: 10, marginTop: 4 }}>
+                            <a href={b.original_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                              🔗 Source Image
+                            </a>
+                          </div>
+                        )}
                       </details>
                     ))}
                   </div>
