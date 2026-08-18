@@ -135,14 +135,18 @@ DISAGREEMENTS: ${intel.disagreements.join(" | ")}
 PODCAST ANGLE: ${intel.podcast_angle}
 COVERAGE: ${srcList}
 
-Write ${spec.brief}
+${opts.critique?.length ? `
+⚠️ EDITOR-IN-CHIEF CRITIQUE (Previous draft failed quality review - you MUST address ALL points below):
+${opts.critique.map((c, i) => `${i + 1}. ${c}`).join("\n")}
+
+Write a NEW script that directly addresses every critique point above. Be specific and concrete.
+` : `Write ${spec.brief}`}
+
 Format: NEWSCAST AI audio show "${opts.format}" — two speakers: ${castBlock}. Alternate speakers naturally; the host drives, the analyst adds depth. Reference that sources were cross-checked where relevant. Factual, vivid, human. NEVER invent facts not in the dossier.
 Constraints: EXACTLY ${spec.segs} segments. Each segment text is 1-2 short sentences and MUST be under 120 characters (it feeds a text-to-speech engine with a hard limit).
 Title: punchy episode title (≤70 chars). Description: 1 sentence. Tags: 3-5 lowercase topics.
 ${langInstruction}
-Speaker field must be exactly one of: ${cast.map((c) => c.name).join(", ")}.
-
-${opts.critique?.length ? `CRITIQUE FROM PREVIOUS DRAFT (MUST ADDRESS):\n${opts.critique.map(c => `- ${c}`).join("\n")}` : ""}`;
+Speaker field must be exactly one of: ${cast.map((c) => c.name).join(", ")}.`;
 
   const { data, model } = await chatJson<{ title: string; description: string; tags: string[]; segments: { speaker: string; direction: string; text: string }[] }>({
     system: "You are the head podcast writer at NEWSCAST AI, producing scripts performed by AI voices. You write for the ear: short sentences, no lists, no URLs, natural spoken flow with light chemistry between hosts.",
@@ -189,6 +193,13 @@ ${opts.critique?.length ? `CRITIQUE FROM PREVIOUS DRAFT (MUST ADDRESS):\n${opts.
       };
     })
     .filter((s) => s.text.trim().length > 0);
+
+  // Validate that we have actual content to synthesize
+  if (segments.length === 0) {
+    console.error("[generateScript] No valid segments generated from LLM output");
+    console.error("[generateScript] Raw segments:", JSON.stringify(allRawSegs.slice(0, 3), null, 2));
+    throw new Error(`Script generation failed: no valid segments (got ${allRawSegs.length} raw segments, 0 after filtering)`);
+  }
 
   const estimated = Math.round(segments.reduce((acc, s) => acc + s.text.split(/\s+/).length, 0) / 1.55); // ~155wpm speech incl. pauses
   return {

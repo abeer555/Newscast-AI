@@ -29,7 +29,7 @@ interface Evaluation {
 interface Episode {
   id: string; cluster_id: string; title: string; format: string; language: "en" | "ar"; status: string; progress: number; stage_label: string;
   error: string | null; script: Script | null; audio_path: string | null; audio_duration: number | null; evaluation: Evaluation | null;
-  created_at: number; script_model: string | null; play_count: number;
+  created_at: number; updated_at: number; script_model: string | null; play_count: number;
   video_status: string | null; video_path: string | null; video_duration: number | null; video_error: string | null; video_mode?: "local" | "article_images";
   storyboard: { beats: { index: number; image_prompt: string; caption: string; duration: number; frame_path?: string }[]; total_duration: number } | null;
 }
@@ -51,13 +51,18 @@ export default function StudioPage() {
   const load = async () => {
     const j = await api<Episode>(`/api/episodes/${id}`);
     setEp(j);
-    if (j.script && !dirty) setDraft(j.script);
+    // Always update draft when new script arrives from server, unless user is actively editing
+    if (j.script && (!dirty || j.status === "ready")) {
+      setDraft(j.script);
+      setDirty(false);
+    }
     if (j.status === "ready" && j.audio_path) setTab((t) => (t === "script" && !dirty ? "listen" : t));
   };
   useEffect(() => { void load(); /* eslint-disable-next-line */ }, [id]);
   const live = episodeProgress[id];
   const running = ep && !["ready", "failed", "script_ready", "draft"].includes(ep.status);
-  useInterval(() => { if (running) void load(); }, running ? 2500 : null);
+  // Poll more frequently (1 second) during pipeline execution for faster UI updates
+  useInterval(() => { if (running) void load(); }, running ? 1000 : null);
   // poll while the detached video worker renders
   const videoRunning = ep && (ep.video_status === "queued" || ep.video_status === "storyboard" || ep.video_status === "rendering");
   useInterval(() => { if (videoRunning) void load(); }, videoRunning ? 3000 : null);
@@ -76,14 +81,17 @@ export default function StudioPage() {
 
   const regenerateWithCritique = async () => {
     if (!ep?.evaluation?.improvements) return;
-    setVideoBusy(true);
+    setBusy(true);
     try {
       await api(`/api/episodes/${id}/regenerate`, { method: "POST", body: JSON.stringify({ critique: ep.evaluation.improvements }) });
       pushToast("Regenerating script based on Editor critique...", "good");
+      setDirty(false); // Clear any local edits
+      // Force immediate reload to show pipeline status
+      await load();
     } catch (e) {
       pushToast(String(e), "bad");
     } finally {
-      setVideoBusy(false);
+      setBusy(false);
     }
   };
   const recreateInLanguage = async (lang: string) => {
@@ -273,12 +281,17 @@ export default function StudioPage() {
         <div style={{ maxWidth: 820 }}>
           {ep.audio_path ? (
             <>
-              <AudioPlayer src={ep.audio_path} segments={draft?.segments} duration={ep.audio_duration} episodeId={ep.id} />
-              {draft && (
+              <AudioPlayer 
+                src={`${ep.audio_path}?v=${ep.updated_at ?? ep.created_at ?? Date.now()}`} 
+                segments={ep.script?.segments} 
+                duration={ep.audio_duration} 
+                episodeId={ep.id} 
+              />
+              {ep.script && (
                 <div className="card pad" style={{ marginTop: 14 }}>
                   <div className="label" style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "var(--text-3)", fontWeight: 600, marginBottom: 10 }}>Transcript</div>
                   <div style={{ display: "grid", gap: 8, maxHeight: 320, overflow: "auto" }}>
-                    {draft.segments.map((s, i) => (
+                    {ep.script.segments.map((s, i) => (
                       <div key={i} style={{ fontSize: 13.5, lineHeight: 1.55 }}>
                         <b style={{ color: s.index % 2 === 0 ? "var(--accent)" : "var(--accent-2)" }}>{s.speaker}: </b>{s.text}
                       </div>

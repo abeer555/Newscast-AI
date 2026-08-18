@@ -69,9 +69,9 @@ Also:
 - publish_confidence: weighted 0..1 (accuracy 30, coverage 20, contradiction 15, syndication 10, clarity 10, visuals 8, audio 5, sync 2).
 - reasons: 2-6 short human-readable bullets explaining the biggest drivers of the score.
 - fact_check_notes: what biggest fact is thin or contested and what would firm it up.
-- improvements: 0-3 concrete edits (each ≤ 30 words).
+- improvements: 3-5 SPECIFIC, ACTIONABLE edits (each ≤40 words). Format as direct imperatives: "Add source attribution to segment 3", "Break segment 7 into two shorter sentences", "Replace vague 'sources say' in segment 5 with actual source names from the dossier". Be concrete and reference specific segment numbers or text.
 `,
-    user: `SCRIPT (title=${args.script.title}, est ${args.script.estimated_seconds}s, real ${args.audioDurationSec}s):
+    user: `SCRIPT (title=${args.script.title}, est ${args.script.estimated_seconds}s, real ${args.audioDurationSec}s, ${args.script.segments.length} segments):
 ${scriptText}
 
 VERIFIED FACTS (${args.facts.length}):

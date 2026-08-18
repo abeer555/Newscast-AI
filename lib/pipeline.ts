@@ -65,7 +65,16 @@ const EVAL_SCHEMA = {
 function setEpisode(id: string, patch: Record<string, unknown>) {
   const db = getDb();
   const keys = Object.keys(patch);
-  db.prepare(`UPDATE episodes SET ${keys.map((k) => `${k}=?`).join(", ")}, updated_at=? WHERE id=?`).run(...keys.map((k) => patch[k] as string | number | null), Date.now(), id);
+  try {
+    db.prepare(`UPDATE episodes SET ${keys.map((k) => `${k}=?`).join(", ")}, updated_at=? WHERE id=?`).run(...keys.map((k) => patch[k] as string | number | null), Date.now(), id);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("readonly") || msg.includes("read-only") || msg.includes("SQLITE_READONLY")) {
+      console.error(`[setEpisode] Database is read-only - cannot update episode ${id}`);
+      throw new Error("Database is in read-only mode. Episode updates are not available on this deployment.");
+    }
+    throw e;
+  }
 }
 
 export function emit(episodeId: string, status: string, progress: number, stage: string, extra?: unknown) {
@@ -79,6 +88,12 @@ export async function runEpisodePipeline(episodeId: string, critique?: string[])
     id: string; cluster_id: string; format: EpisodeFormat; language: ScriptLanguage; style: string; script: string | null; title: string;
   };
   if (!ep) throw new Error("episode not found");
+
+  // Log if this is a regeneration with critique
+  if (critique && critique.length > 0) {
+    logEvent("pipeline", `Regenerating episode ${episodeId} with ${critique.length} critique points`);
+    console.log(`[pipeline] Regenerating episode ${episodeId} with critique:`, critique);
+  }
 
   try {
     // 1. intelligence + evidence layers
@@ -102,6 +117,12 @@ export async function runEpisodePipeline(episodeId: string, critique?: string[])
     emit(episodeId, "scripting", 0.18, "Writing episode script");
     const { script, intel, model } = await generateScript({ clusterId: ep.cluster_id, format: ep.format, language: ep.language, style: ep.style, critique });
     const scriptHash = crypto.createHash("sha1").update(JSON.stringify(script.segments.map((s) => [s.voice, s.text]))).digest("hex");
+    
+    console.log(`[pipeline] Generated new script for ${episodeId}: ${script.segments.length} segments, title: "${script.title}"`);
+    if (critique && critique.length > 0) {
+      console.log(`[pipeline] Script was regenerated with critique - should be improved`);
+    }
+    
     setEpisode(episodeId, {
       script: JSON.stringify(script),
       script_model: model,
@@ -113,6 +134,7 @@ export async function runEpisodePipeline(episodeId: string, critique?: string[])
     });
     episodeProgress(episodeId, "script_ready", 0.42, "Script ready — review or synthesize", { script });
     logEvent("pipeline", `Script ready for episode ${episodeId} (${script.segments.length} segments, ${script.estimated_seconds}s)`);
+
 
     // 3. synthesis (auto-continue — full autopilot)
     await synthesizeCurrentScript(episodeId, intel, facts);

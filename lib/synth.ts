@@ -45,18 +45,30 @@ async function ttsChunk(text: string, voice: string, language: ScriptLanguage): 
 
 /** Concatenate WAV buffers (PCM) into one valid WAV. Assumes same format/rate across buffers. */
 export function concatWavs(buffers: Buffer[]): Buffer {
+  if (buffers.length === 0) throw new Error("No WAV buffers to concatenate");
   if (buffers.length === 1) return buffers[0];
   const datas: Buffer[] = [];
   let fmt: Buffer | null = null;
   let dataSize = 0;
-  for (const b of buffers) {
+  for (let i = 0; i < buffers.length; i++) {
+    const b = buffers[i];
+    if (!b || b.length === 0) {
+      console.warn(`[concatWavs] Buffer ${i} is empty, skipping`);
+      continue;
+    }
     const header = parseWavHeader(b);
-    if (!header) continue;
+    if (!header) {
+      console.warn(`[concatWavs] Buffer ${i} is not a valid WAV (size: ${b.length} bytes), skipping`);
+      console.warn(`[concatWavs] First 20 bytes: ${b.subarray(0, 20).toString('hex')}`);
+      continue;
+    }
     if (!fmt) fmt = b.subarray(12, header.fmtEnd);
     datas.push(b.subarray(header.dataStart, header.dataStart + header.dataSize));
     dataSize += header.dataSize;
   }
-  if (!fmt) throw new Error("No valid WAV segments");
+  if (!fmt || datas.length === 0) {
+    throw new Error(`No valid WAV segments (got ${buffers.length} buffers, ${datas.length} valid)`);
+  }
   const fmtSize = fmt.length;
   const out = Buffer.alloc(12 + 8 + fmtSize + 8 + dataSize);
   out.write("RIFF", 0);
@@ -96,6 +108,11 @@ export async function synthesizeEpisode(opts: {
   language: ScriptLanguage;
   onProgress?: (done: number, total: number) => void;
 }): Promise<{ audioPath: string | null; durationSec: number; segmentCount: number }> {
+  // Validate script has segments
+  if (!opts.script.segments || opts.script.segments.length === 0) {
+    throw new Error("Cannot synthesize: script has no segments");
+  }
+  
   // Arabic is not supported by the local Kokoro backend — return early with no audio.
   if (opts.language === "zh") {
     // Chinese works but Kokoro struggles with some characters, allow it for now.
@@ -126,14 +143,29 @@ export async function synthesizeEpisode(opts: {
     else tasks.push(...chunkForTTS(t.text).map((text) => ({ text, voice: t.voice })));
   }
 
+  if (tasks.length === 0) {
+    throw new Error("Cannot synthesize: no text chunks after processing");
+  }
+
   let done = 0;
-  for (const t of tasks) {
-    const buf = await retryTTS(t.text, t.voice, opts.language);
-    buffers.push(buf);
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    try {
+      const buf = await retryTTS(t.text, t.voice, opts.language);
+      buffers.push(buf);
+    } catch (e) {
+      console.error(`[synthesizeEpisode] Failed to synthesize chunk ${i}/${tasks.length}:`, t.text.slice(0, 50));
+      throw new Error(`TTS failed on chunk ${i}: ${e instanceof Error ? e.message : e}`);
+    }
     done++;
     opts.onProgress?.(done, tasks.length);
     if (done < tasks.length) await new Promise((r) => setTimeout(r, 350));
   }
+  
+  if (buffers.length === 0) {
+    throw new Error("No audio buffers generated - all TTS calls failed");
+  }
+  
   const combined = concatWavs(buffers);
   const file = `${opts.episodeId}.wav`;
   const full = path.join(AUDIO_DIR, file);

@@ -130,19 +130,40 @@ export async function chat(opts: ChatCallOpts): Promise<{ content: string; model
 }
 
 export function extractJson<T>(raw: string): T {
-  let s = raw.trim();
+  // Strip any thinking tags first
+  let s = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  
+  // Check for markdown code fences
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) s = fence[1].trim();
+  
   const start = s.indexOf("{");
   const end = s.lastIndexOf("}");
-  if (start === -1 || end <= start) throw new Error("No JSON object in model output: " + raw.slice(0, 120));
+  if (start === -1 || end <= start) {
+    console.error("[extractJson] No JSON object found in output:", raw.slice(0, 200));
+    throw new Error("No JSON object in model output: " + raw.slice(0, 120));
+  }
+  
   // balanced-brace slice to tolerate trailing prose
   let depth = 0, endIdx = start;
   for (let i = start; i <= end; i++) {
     if (s[i] === "{") depth++;
-    else if (s[i] === "}") { depth--; if (depth === 0) { endIdx = i; break; } }
+    else if (s[i] === "}") { 
+      depth--; 
+      if (depth === 0) { 
+        endIdx = i; 
+        break; 
+      } 
+    }
   }
-  return JSON.parse(s.slice(start, endIdx + 1)) as T;
+  
+  const jsonStr = s.slice(start, endIdx + 1);
+  try {
+    return JSON.parse(jsonStr) as T;
+  } catch (e) {
+    console.error("[extractJson] Failed to parse JSON:", jsonStr.slice(0, 200));
+    throw new Error(`JSON parse error: ${e instanceof Error ? e.message : e}`);
+  }
 }
 
 export async function chatJson<T>(opts: ChatCallOpts): Promise<{ data: T; model: string; cached: boolean; latencyMs: number; raw: string }> {

@@ -6,7 +6,7 @@ import AudioPlayer from "@/components/AudioPlayer";
 
 interface Ep {
   id: string; title: string; status: string; format: string; language: string; audio_path: string | null;
-  audio_duration: number | null; evaluation: { overall?: number; verdict?: string; publish_confidence?: number; decision?: string; reasons?: string[] } | null; created_at: number;
+  audio_duration: number | null; evaluation: { overall?: number; verdict?: string; publish_confidence?: number; decision?: string; reasons?: string[] } | null; created_at: number; updated_at: number;
   play_count: number; stage_label: string; progress: number; cluster_category: string | null;
 }
 
@@ -114,7 +114,7 @@ export default function LibraryPage() {
                 </div>
                 <Link href={`/studio/${e.id}`} style={{ fontWeight: 650, fontSize: 15.5, lineHeight: 1.4 }}>{e.title}</Link>
               </div>
-              {e.audio_path && <AudioPlayer compact src={e.audio_path} episodeId={e.id} duration={e.audio_duration} />}
+              {e.audio_path && <AudioPlayer compact src={`${e.audio_path}?v=${e.updated_at ?? e.created_at}`} episodeId={e.id} duration={e.audio_duration} />}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
                 <span className="dim" style={{ fontSize: 12 }}>{fmtDuration(e.audio_duration)} · {e.play_count} plays · {timeAgo(e.created_at)}</span>
                 <div style={{ display: "flex", gap: 6 }}>
