@@ -1,12 +1,26 @@
 .env
 kokoro/
-public/
 node_modules/
 .next/
-data/
-public/audio/
 *.log
 next-env.d.ts
 .*
+
+# Markdown files - exclude all except README
 *.md
 !README.md
+
+# Allow data directory and database
+!data/
+!data/newscast.db
+!data/newscast.db-shm
+!data/newscast.db-wal
+
+# Exclude only logs and frames, but include audio/video for demo
+data/logs/
+data/frames/
+
+# Allow public directory with audio/video for demo
+!public/
+!public/**
+public/frames/

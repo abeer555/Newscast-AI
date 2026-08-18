@@ -6,6 +6,16 @@
 
 ---
 
+## 🚀 Live Demo
+
+**[View Live Demo →](https://newscast.t0r.tech)**
+
+Explore the full newsroom interface with real generated episodes, intelligence dossiers, and the production studio.
+
+> **Note**: The demo deployment showcases the UI and existing data. For full production deployment with live news ingestion, see [Getting Started](#getting-started).
+
+---
+
 ```
   ┌──────────────────────────────────────────────────────────────────────────────────┐
   │                                                                                  │
