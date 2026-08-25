@@ -4,8 +4,9 @@
  * Design (ffmpeg-only, no extra deps):
  *   per beat   : slow zoom-in ("Ken Burns") from a 1280x720 Z-Image frame
  *   between    : 0.6s crossfades via xfade
- *   overlay    : beat caption in a lower-third band + speaker-colored subtitle
- *                track timed to the real audio (drawtext)
+ *   subtitles  : speaker-colored, timed to the real audio via libass (HarfBuzz
+ *                shapes Devanagari/Arabic correctly, so Hindi doesn't render as
+ *                boxes) — exactly ONE subtitle track, no duplicate lower-third.
  *   audio      : the episode WAV is the master clock — video length snaps to it
  *   encode     : h264 yuv420p aac → <video> plays everywhere
  */
@@ -27,34 +28,120 @@ try {
 }
 
 const FADE = 0.6;
-const MAX_FONTS = [
-  "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-  "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-  "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+
+const LATIN_FONT_DIR = "/usr/share/fonts/TTF:/usr/share/fonts/truetype/dejavu:/usr/share/fonts/dejavu";
+const FONT_DIR = "/usr/share/fonts/noto:/usr/share/fonts/noto-cjk:/usr/share/fonts/TTF:/usr/share/fonts/truetype/dejavu:/usr/share/fonts/dejavu";
+
+const FONT_CANDIDATES: { fam: string; files: string[] }[] = [
+  {
+    fam: "Noto Sans Devanagari",
+    files: [
+      "/usr/share/fonts/noto/NotoSansDevanagari-SemiBold.ttf",
+      "/usr/share/fonts/noto/NotoSansDevanagari-Medium.ttf",
+      "/usr/share/fonts/noto/NotoSansDevanagari-Regular.ttf",
+    ],
+  },
+  {
+    fam: "Noto Sans",
+    files: [
+      "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
+      "/usr/share/fonts/noto/NotoSans-Medium.ttf",
+      "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+      "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+      "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+      "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    ],
+  },
 ];
-function findFont(): string | null {
-  for (const f of MAX_FONTS) if (fs.existsSync(f)) return f;
-  return null;
+const FONT_NAMES = ["Noto Sans", "Noto Sans Devanagari", "Noto Sans Arabic", "Noto Sans Hebrew", "Noto Sans Thai", "Noto Sans Bengali", "Noto Sans Gurmukhi", "Noto Sans Telugu", "Noto Sans Kannada", "Noto Sans Malayalam", "Noto Sans Tamil", "Noto Sans Khmer", "Noto Sans CJK SC", "DejaVu Sans"];
+
+/** Find a font file that actually covers the script's characters. */
+function findFontForText(text: string): { file: string; family: string } | null {
+  const needs = FONT_CANDIDATES.map((c) => ({ ...c, file: c.files.find((f) => fs.existsSync(f)) })).filter((c) => c.file) as { fam: string; file: string }[];
+  if (needs.length === 0) return null;
+  const devanagari = /[\u0900-\u097F\uA8E0-\uA8FF]/.test(text);
+  const chinese = /[\u4E00-\u9FFF\u3400-\u4DBF]/.test(text);
+  const arabic = /[\u0590-\u08FF]/.test(text);
+  const cjkzh = FONT_NAMES.find((f) => f.includes("CJK SC"));
+  if (chinese && cjkzh) return { family: cjkzh, file: "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf" };
+  // fall back to the first family whose file exists
+  if (devanagari) {
+    const dn = needs.find((c) => c.fam.includes("Devanagari"));
+    if (dn) return dn;
+  }
+  const generic = needs.find((c) => c.fam === "Noto Sans") ?? needs[0];
+  return generic;
 }
 
-/** ffmpeg drawtext escaping: \ : ' % , [ ] ; and newlines. */
-function dte(s: string): string {
+function findRenderFont(script: PodcastScript): { family: string; file: string } {
+  const text = script.segments.map((s) => s.text).join(" ");
+  const found = findFontForText(text);
+  if (found) return found;
+  return {
+    family: "DejaVu Sans",
+    file: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+  };
+}
+
+/** Escape a string for embedding inside an ASS subtitle line. */
+function assText(s: string): string {
   return s
     .replace(/\\/g, "\\\\")
-    .replace(/:/g, "\\:")
-    .replace(/'/g, "\u2019")
-    .replace(/%/g, "\\%")
-    .replace(/,/g, "\\,")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]")
-    .replace(/;/g, "\\;")
-    .replace(/\n/g, " ");
+    .replace(/\n/g, "\\N")
+    .replace(/\r/g, "")
+    .replace(/\t/g, " ");
 }
 
-/** Arabic / Hebrew text needs bidi shaping for drawtext to render it correctly. */
-function containsRtl(s: string): boolean {
-  return /[\u0590-\u08FF]/.test(s);
+/** Convert seconds to ASS timestamp `H:MM:SS.cc`. */
+function assTime(sec: number): string {
+  const ms = Math.round(Math.max(0, sec) * 100);
+  const h = Math.floor(ms / 360000);
+  const m = Math.floor((ms % 360000) / 6000);
+  const s = Math.floor((ms % 6000) / 100);
+  const c = ms % 100;
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(c).padStart(2, "0")}`;
+}
+
+/** Build a libass subtitle file with per-speaker colored, correctly-shaped text. */
+function buildAssSubtitles(opts: {
+  script: PodcastScript;
+  audioSec: number;
+  width: number;
+  height: number;
+  fontFamily: string;
+  file: string;
+}): string {
+  const subs = segmentTimeline(opts.script, opts.audioSec);
+  const speakers = Array.from(new Set(opts.script.segments.map((s) => s.speaker)));
+  // libass colours are &H AABBGGRR — alpha first, then blue, green, red.
+  const palette = ["&H00F9D366", "&H00E8D38F", "&H005483EF", "&H00C0F2B8", "&H008E8CF5"];
+
+  const header = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    "PlayResX: " + opts.width,
+    "PlayResY: " + opts.height,
+    "WrapStyle: 2",
+    "ScaledBorderAndShadow: yes",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    `Style: Sub,${opts.fontFamily},26,&H00FFFFFF,&H00000000,&H80000000,0,2,0,2,24,24,96,1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ];
+
+  const lines = subs.map((s) => {
+    const color = palette[Math.max(0, speakers.indexOf(s.speaker)) % palette.length];
+    const text = assText(s.text.slice(0, 150));
+    return `Dialogue: 0,${assTime(s.start)},${assTime(s.end)},Sub,,0,0,0,,{\\1c${color}}${text}`;
+  });
+
+  const content = header.join("\n") + "\n" + lines.join("\n") + "\n";
+  fs.writeFileSync(opts.file, content);
+  return opts.file;
 }
 
 export interface RenderOpts {
@@ -143,18 +230,12 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
   // --- final graph: each clip is its OWN INPUT (concat-demuxer with -c copy produces
   // stale mpeg-4 timestamps which makes xfade pin the first beat — so we skip concat and
   // xfade across inputs directly).
-  opts.onProgress?.(0.72, "Crossfades & overlays");
-  const font = findFont();
-  const fontOpt = font ? `:fontfile='${font}'` : "";
-  const captions = board.beats.map((b) => b.caption);
-  const subs = segmentTimeline(opts.script, audioSec);
-  const rtl = containsRtl(opts.script.segments.map((s) => s.text).join(" "));
+  opts.onProgress?.(0.72, "Crossfades & subtitles");
 
   const fc: string[] = [];
 
   // xfade expects each input already SHIFTED so its frame-0 PTS equals the offset.
   // Pre-shift every input with setpts, then chain xfades that transition at those times.
-  // frameDur = on-screen seconds for beat i (transition INTO next beat happens at frameDur[i]-FADE).
   let offset = 0;
   const offsets: number[] = [0];
   for (let i = 1; i < n; i++) {
@@ -171,33 +252,21 @@ export async function renderEpisodeVideo(opts: RenderOpts): Promise<{ filePath: 
     last = out;
   }
 
-  // per-beat lower-third caption band
-  let capAcc = 0;
-  for (let i = 0; i < n; i++) {
-    const st = capAcc, en = capAcc + frameDur[i];
-    capAcc = en;
-    const text = dte(captions[i] || "");
-    if (!text) continue;
-    fc.push(
-      `[${last}]drawbox=x=0:y=ih-150:w=iw:h=56:color=black@0.42:t=fill:enable='between(t,${st.toFixed(2)},${en.toFixed(2)})'[cap${i}]`
-    );
-    fc.push(
-      `[cap${i}]drawtext=text='${text}'${fontOpt}:fontsize=30:fontcolor=white:x=(w-text_w)/2:y=h-140:enable='between(t,${st.toFixed(2)},${en.toFixed(2)})'[capt${i}]`
-    );
-    last = `capt${i}`;
-  }
-
-  // speaker subtitles timed to real audio
-  const palette = ["#FFD166", "#8FD3E8", "#EF8354", "#B8F2C0"];
-  const speakers = Array.from(new Set(opts.script.segments.map((s) => s.speaker)));
-  for (const s of subs) {
-    const color = palette[Math.max(0, speakers.indexOf(s.speaker)) % palette.length];
-    const line = rtl ? s.text : s.text; // shaping note below
-    fc.push(
-      `[${last}]drawtext=text='${dte(line.slice(0, 120))}'${fontOpt}:fontsize=24:fontcolor=${color.replace("#", "0x")}:borderw=2:bordercolor=black@0.8:x=(w-text_w)/2:y=h-84:enable='between(t,${s.start.toFixed(2)},${s.end.toFixed(2)})'[sub${Math.round(s.start * 100)}]`
-    );
-    last = `sub${Math.round(s.start * 100)}`;
-  }
+  // ONE correctly-shaped subtitle track (speaker subtitles only — no duplicate lower-third).
+  const renderFont = findRenderFont(opts.script);
+  const assPath = path.join(framesDir, "subs.ass");
+  buildAssSubtitles({
+    script: opts.script,
+    audioSec,
+    width: W,
+    height: H,
+    fontFamily: renderFont.family,
+    file: assPath,
+  });
+  // libass does HarfBuzz shaping: Devanagari/Arabic render as real glyphs, not boxes.
+  const fontsdir = path.dirname(renderFont.file);
+  fc.push(`[${last}]subtitles=filename='${assPath}':fontsdir='${fontsdir}':force_style='Fontname=${renderFont.family},FontsDir=${fontsdir}'[subbed]`);
+  last = "subbed";
 
   fc.push(`[${last}]format=yuv420p[vout]`);
 

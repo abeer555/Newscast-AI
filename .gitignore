@@ -1,31 +1,68 @@
-.env
-kokoro/
+# Dependencies
 node_modules/
-.next/
-*.log
-next-env.d.ts
-.*
+.pnp/
+.pnp.js
 
-# Markdown files - exclude all except README
+# Next.js build output & cache
+.next/
+out/
+build/
+dist/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs & Debug
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# TypeScript build info
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# Databases & Data storage
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+newscast.db
+
+# AI Model weights & checkpoints (Kokoro, PyTorch, etc.)
+kokoro/
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.onnx
+models/
+weights/
+ff_siwis.pt
+
+# Markdown documentation (exclude all except README.md)
 *.md
 !README.md
 
-# Allow data directory and database
-#!data/
-#!data/newscast.db
-#!data/newscast.db-shm
-#!data/newscast.db-wal
-#
-# Exclude only logs and frames, but include audio/video for demo
-#data/logs/
-#data/frames/
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# Allow public directory with audio/video for demo
-#!public/
-#!public/**
-#public/frames/o
-#
-#
-public/
-data/
-
+# IDE / Editor files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
