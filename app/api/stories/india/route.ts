@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { enrichStories } from "@/lib/enrich";
 import { evidenceForClusters } from "@/lib/pulse";
 import { INDIA_SOURCE_IDS } from "@/lib/sources";
+import { safeArray } from "@/lib/json";
 
 interface IndiaRow extends Record<string, unknown> {
   id: string;
@@ -93,7 +94,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     stories: enrichStories(rows).map((r) => ({
       ...r,
-      topics: JSON.parse(r.topics ?? "[]") as string[],
+      topics: safeArray<string>(r.topics),
       sources: (r.sources ?? "").split(",").filter(Boolean),
       has_intel: !!r.has_intel,
       india_origin: !!r.has_india_coverage,

@@ -29,6 +29,7 @@
 import { getDb } from "./db";
 import { citeText, type CitableFact, type Citation } from "./cite";
 import { type Attestation, type ClaimTier } from "./verification";
+import { idList, safeArray, safeParse } from "./json";
 import type { PodcastScript } from "./scriptgen";
 import type { Beat } from "./storyboard";
 
@@ -250,15 +251,13 @@ function loadFacts(clusterId: string): { fact: FactRow; tier: ClaimTier; outlets
     return [];
   }
   return rows.map((fact) => {
-    let attestations: Attestation[] = [];
-    try {
-      attestations = JSON.parse(fact.attestation_json) as Attestation[];
-    } catch {
-      attestations = [];
-    }
+    const attestations = safeArray<Attestation>(fact.attestation_json);
     const outlets = [...new Set(attestations.map((a) => a.source).filter(Boolean))];
     const chains = [...new Set(attestations.map((a) => a.chain_label).filter(Boolean))];
-    const independent = fact.independent_count ?? (chains.length || fact.support_count || 0);
+    // Deliberately not falling back to support_count: that column counts articles,
+    // and ten papers running one wire dispatch would be scored here as ten
+    // independent chains — the precise overstatement this whole layer exists to stop.
+    const independent = fact.independent_count ?? chains.length;
     return { fact, tier: tierOf(fact, independent), outlets, independent };
   });
 }
@@ -282,22 +281,15 @@ const MEASURED_METHOD =
   "Each utterance was timed from the audio it produced: the WAV written for that utterance is measured byte-exactly and the offsets accumulate. Within an utterance that merges several script lines, the line boundaries are split by character count.";
 
 function parseTimeline(raw: string | null): Utterance[] {
-  if (!raw) return [];
-  try {
-    const v = JSON.parse(raw);
-    if (!Array.isArray(v)) return [];
-    return v
-      .map((u: Record<string, unknown>) => ({
-        start: Number(u.start) || 0,
-        end: Number(u.end) || 0,
-        text: String(u.text ?? ""),
-        voice: String(u.voice ?? ""),
-        segments: Array.isArray(u.segments) ? u.segments.map(Number).filter((n) => Number.isFinite(n)) : [],
-      }))
-      .filter((u) => u.end > u.start);
-  } catch {
-    return [];
-  }
+  return safeArray<Record<string, unknown>>(raw)
+    .map((u) => ({
+      start: Number(u.start) || 0,
+      end: Number(u.end) || 0,
+      text: String(u.text ?? ""),
+      voice: String(u.voice ?? ""),
+      segments: Array.isArray(u.segments) ? u.segments.map(Number).filter((n) => Number.isFinite(n)) : [],
+    }))
+    .filter((u) => u.end > u.start);
 }
 
 /**
@@ -363,7 +355,29 @@ function round2(n: number): number {
  * Backing
  * ------------------------------------------------------------------ */
 
+/**
+ * Ordering used to pick the *most informative* citation to show first. It is not a
+ * ranking of trust: `disputed` sits mid-table because a disputed claim is
+ * well-attested — the outlets disagree about it — and that makes it worth surfacing
+ * ahead of a single-source line. Which tier a whole segment is labelled with is
+ * decided in `segmentTier`, not here, because "strongest wins" is the wrong rule
+ * for a segment that carries a contradiction.
+ */
 const TIER_RANK: Record<ClaimTier, number> = { confirmed: 4, corroborated: 3, disputed: 2, reported: 1, unverified: 0 };
+
+/**
+ * The tier a segment is labelled with.
+ *
+ * A contradiction always wins. If a line carries one confirmed claim and one that
+ * outlets actively dispute, calling the line "confirmed" is the exact failure the
+ * evidence layer exists to prevent: the dispute disappears and the listener is told
+ * the opposite of the truth about how solid the line is.
+ */
+function segmentTier(cited: Citation[]): ClaimTier | null {
+  if (!cited.length) return null;
+  if (cited.some((c) => c.tier === "disputed")) return "disputed";
+  return cited.reduce<ClaimTier | null>((acc, c) => (acc === null || TIER_RANK[c.tier] > TIER_RANK[acc] ? c.tier : acc), null);
+}
 
 function levelFor(tier: ClaimTier | null, independent: number): BackingLevel {
   if (!tier) return "none";
@@ -380,10 +394,26 @@ const LEVEL_WORD: Record<BackingLevel, string> = {
   none: "Not backed by the evidence layer",
 };
 
-function labelFor(level: BackingLevel, outlets: number, tier: ClaimTier | null): string {
+/**
+ * The phrase shown under a line during playback.
+ *
+ * `outlets` can be 0 even when claims matched — a fact row carrying a chain count but
+ * no stored attestations produces exactly that — and "0 supporting sources · High
+ * confidence" is a sentence that should never reach a listener. When we cannot name
+ * the outlets we report the chain count instead, and if we have neither we say so.
+ */
+function labelFor(level: BackingLevel, outlets: number, tier: ClaimTier | null, independent = 0): string {
   if (level === "none") return LEVEL_WORD.none;
-  if (tier === "disputed") return `${outlets} ${outlets === 1 ? "source" : "sources"} · sources conflict here`;
-  return `${outlets} supporting ${outlets === 1 ? "source" : "sources"} · ${LEVEL_WORD[level]}`;
+  if (tier === "disputed") {
+    return outlets > 0
+      ? `${outlets} ${outlets === 1 ? "source" : "sources"} · sources conflict here`
+      : "Sources conflict here";
+  }
+  if (outlets > 0) return `${outlets} supporting ${outlets === 1 ? "source" : "sources"} · ${LEVEL_WORD[level]}`;
+  if (independent > 0) {
+    return `${independent} independent reporting ${independent === 1 ? "chain" : "chains"} · ${LEVEL_WORD[level]}`;
+  }
+  return "Backed by a claim with no recorded outlet";
 }
 
 /* ------------------------------------------------------------------ *
@@ -472,13 +502,9 @@ function provenanceFor(clusterId: string, beat: StoredBeat): BeatLink["provenanc
 export function episodeMedia(episodeId: string): EpisodeMedia | null {
   const ep = loadEpisode(episodeId);
   if (!ep?.script) return null;
-  let script: PodcastScript;
-  try {
-    script = JSON.parse(ep.script) as PodcastScript;
-  } catch {
-    return null;
-  }
-  const segs = script.segments ?? [];
+  const script = safeParse<PodcastScript | null>(ep.script, null);
+  if (!script || !Array.isArray(script.segments)) return null;
+  const segs = script.segments;
   const facts = loadFacts(ep.cluster_id);
   const citable: CitableFact[] = facts.map((f) => ({
     id: f.fact.id,
@@ -498,7 +524,7 @@ export function episodeMedia(episodeId: string): EpisodeMedia | null {
     const citations = cited.sentences.flatMap((x) => x.citations);
     const unique = new Map(citations.map((c) => [c.claim_id, c]));
     const kept = [...unique.values()].sort((a, b) => TIER_RANK[b.tier] - TIER_RANK[a.tier] || b.match - a.match);
-    const tier = kept.reduce<ClaimTier | null>((acc, c) => (acc === null || TIER_RANK[c.tier] > TIER_RANK[acc] ? c.tier : acc), null);
+    const tier = segmentTier(kept);
     const outlets = [...new Set(kept.flatMap((c) => c.outlets))];
     const independent = kept.reduce((m, c) => Math.max(m, c.independent_count), 0);
     const level = levelFor(tier, independent);
@@ -508,7 +534,7 @@ export function episodeMedia(episodeId: string): EpisodeMedia | null {
       text: s.text,
       tier,
       level,
-      label: labelFor(level, outlets.length, tier),
+      label: labelFor(level, outlets.length, tier, independent),
       outlets,
       independent,
       claim_ids: kept.map((c) => c.claim_id),
@@ -519,27 +545,23 @@ export function episodeMedia(episodeId: string): EpisodeMedia | null {
 
   // Beats, with their own on-screen window and the claims their narration carries.
   let beats: BeatLink[] = [];
-  try {
-    const board = ep.storyboard ? (JSON.parse(ep.storyboard) as { beats: StoredBeat[] }) : null;
-    if (board?.beats?.length) {
-      beats = board.beats.map((b) => {
-        const [from, to] = b.segment_range ?? [0, 0];
-        const covered = backing.filter((x) => x.index >= from && x.index <= to);
-        const startT = timings[from]?.start ?? 0;
-        const endT = timings[Math.min(to, timings.length - 1)]?.end ?? startT + (b.duration ?? 0);
-        return {
-          index: b.index,
-          caption: b.caption ?? "",
-          start: round2(startT),
-          end: round2(endT),
-          segment_range: [from, to] as [number, number],
-          provenance: provenanceFor(ep.cluster_id, b),
-          claim_ids: [...new Set(covered.flatMap((c) => c.claim_ids))],
-        };
-      });
-    }
-  } catch {
-    beats = [];
+  const board = safeParse<{ beats?: StoredBeat[] } | null>(ep.storyboard, null);
+  if (board?.beats?.length) {
+    beats = board.beats.map((b) => {
+      const [from, to] = b.segment_range ?? [0, 0];
+      const covered = backing.filter((x) => x.index >= from && x.index <= to);
+      const startT = timings[from]?.start ?? 0;
+      const endT = timings[Math.min(to, timings.length - 1)]?.end ?? startT + (b.duration ?? 0);
+      return {
+        index: b.index,
+        caption: b.caption ?? "",
+        start: round2(startT),
+        end: round2(endT),
+        segment_range: [from, to] as [number, number],
+        provenance: provenanceFor(ep.cluster_id, b),
+        claim_ids: [...new Set(covered.flatMap((c) => c.claim_ids))],
+      };
+    });
   }
 
   // Claims, pointing forwards into the audio and the video.
@@ -580,7 +602,18 @@ export function episodeMedia(episodeId: string): EpisodeMedia | null {
  * Checks
  * ------------------------------------------------------------------ */
 
-const CONTRAST_MARKERS = /\b(but|however|although|though|whereas|by contrast|on the other hand|disput|deni|contradict|conflict|unconfirmed|not verified|differ|reject|contest)/i;
+/**
+ * Disclosure language, split by strength.
+ *
+ * The word "but" alone used to satisfy a 14-point hard-fail check, which meant any
+ * script containing an ordinary sentence connective was credited with disclosing a
+ * contradiction it never mentioned. Only the explicit markers count as disclosure
+ * now; a bare connective earns a warning, because it *might* be doing the work but
+ * we cannot tell from the text.
+ */
+const STRONG_CONTRAST =
+  /\b(disput|deni(?:es|ed|al)|contradict|conflict|unconfirmed|not (?:independently )?(?:verified|confirmed|corroborated)|reject|contest|by contrast|on the other hand|whereas|however|although|contrary to|no evidence|casts? doubt)/i;
+const WEAK_CONTRAST = /\b(but|though|differ|while|instead)\b/i;
 const CONSENSUS_CLAIMS = /\b(\d+\s+(?:outlets?|sources?|newsrooms?)|multiple (?:outlets?|sources?)|all (?:major )?outlets?|every (?:major )?outlet|widely (?:confirmed|reported)|outlets? confirm|sources? confirm|confirmed by (?:multiple|several))\b/i;
 const SINGLE_SOURCE_HEDGE = /\b(single|sole|one outlet|only outlet|only one|not independently|yet to be|has not been (?:confirmed|corroborated)|unconfirmed|according to (?:a|one) (?:single )?report)\b/i;
 
@@ -639,9 +672,15 @@ function buildChecks(input: CheckInput): GateCheck[] {
   /* 2. Strength of the evidence the script leans on. */
   {
     const weight = 18;
-    const strong = media ? media.backing.filter((b) => b.level === "high").length : 0;
-    const moderate = media ? media.backing.filter((b) => b.level === "moderate").length : 0;
-    const backed = media ? media.backing.filter((b) => b.claim_ids.length).length : 0;
+    const backedLines = media ? media.backing.filter((b) => b.claim_ids.length) : [];
+    const backed = backedLines.length;
+    // Counted from the chain numbers themselves rather than from the display level,
+    // so the sentence below is literally what was measured. A disputed line is
+    // excluded from both counts however well-attested it is — outlets disagreeing
+    // about a claim is not the same as outlets corroborating it.
+    const strong = backedLines.filter((b) => b.tier !== "disputed" && b.independent >= 3).length;
+    const moderate = backedLines.filter((b) => b.tier !== "disputed" && b.independent === 2).length;
+    const disputed = backedLines.filter((b) => b.tier === "disputed").length;
     const share = backed ? ((strong + moderate * 0.6) / backed) * 100 : 0;
     const status: CheckStatus = !backed ? "fail" : share < 25 ? "fail" : share < 55 ? "warn" : "pass";
     checks.push({
@@ -651,9 +690,9 @@ function buildChecks(input: CheckInput): GateCheck[] {
       weight,
       earned: backed ? scaled(share, 10, 70, weight) : 0,
       measured: backed
-        ? `Of ${backed} backed lines, ${strong} rest on 3+ independent chains and ${moderate} on 2.`
+        ? `Of ${backed} backed lines, ${strong} rest on 3+ independent reporting chains and ${moderate} on 2${disputed ? `; ${disputed} carr${disputed === 1 ? "ies" : "y"} a disputed claim and count for nothing here` : ""}.`
         : "No backed lines to weigh.",
-      rule: "Corroborated lines count 0.6, confirmed lines count 1. Pass above 55% of backed lines, fail below 25%.",
+      rule: "A line on 2 chains counts 0.6, one on 3+ counts 1, a disputed line counts 0. Pass above 55% of backed lines, fail below 25%. Points scale from 10% to 70%, so a bare pass earns partial credit.",
       fix:
         status === "pass"
           ? null
@@ -665,20 +704,21 @@ function buildChecks(input: CheckInput): GateCheck[] {
   /* 3. Contradictions must be disclosed, not smoothed over. */
   {
     const weight = 14;
-    const discloses = CONTRAST_MARKERS.test(scriptText);
+    const strongMarker = STRONG_CONTRAST.test(scriptText);
+    const weakMarker = !strongMarker && WEAK_CONTRAST.test(scriptText);
     const disputedSpoken = media ? media.backing.filter((b) => b.tier === "disputed").length : 0;
     const needed = contradictionPairs > 0;
-    const status: CheckStatus = !needed ? "pass" : discloses ? "pass" : "fail";
+    const status: CheckStatus = !needed ? "pass" : strongMarker ? "pass" : weakMarker ? "warn" : "fail";
     checks.push({
       id: "contradiction_disclosure",
       label: "Conflicting accounts are disclosed",
       status,
       weight,
-      earned: status === "pass" ? weight : 0,
+      earned: status === "pass" ? weight : status === "warn" ? Math.round(weight * 0.4) : 0,
       measured: needed
-        ? `The dossier holds ${contradictionPairs} contradicting claim ${contradictionPairs === 1 ? "pair" : "pairs"}; the script ${discloses ? "does" : "does not"} contain contrasting language, and speaks ${disputedSpoken} disputed ${disputedSpoken === 1 ? "line" : "lines"}.`
+        ? `The dossier holds ${contradictionPairs} contradicting claim ${contradictionPairs === 1 ? "pair" : "pairs"}. The script ${strongMarker ? "names the disagreement explicitly" : weakMarker ? "only contains a general connective such as “but”, which may or may not be doing that work" : "contains no contrasting language at all"}, and speaks ${disputedSpoken} disputed ${disputedSpoken === 1 ? "line" : "lines"}.`
         : "No contradictions were detected between claims, so there is nothing to disclose.",
-      rule: "When the dossier holds a contradiction, the script must contain explicit contrasting language (\"but\", \"disputes\", \"denies\", \"by contrast\"). Otherwise this fails outright.",
+      rule: "When the dossier holds a contradiction, the script must name it — \"disputes\", \"denies\", \"by contrast\", \"has not been confirmed\". A bare \"but\" earns partial credit only; silence fails outright.",
       fix: status === "pass" ? null : "Add a line naming both accounts — who says what, and that the two cannot both be true. The Dossier tab on the story lists the pairs.",
       target: status === "pass" ? null : { tab: "script" },
     });
@@ -733,20 +773,32 @@ function buildChecks(input: CheckInput): GateCheck[] {
     const weight = 8;
     const dur = episode.audio_duration ?? 0;
     const est = script?.estimated_seconds ?? 0;
-    const drift = est > 0 && dur > 0 ? Math.abs(dur - est) / est : 1;
-    const status: CheckStatus = !episode.audio_path || dur <= 0 ? "fail" : drift > 0.45 ? "warn" : "pass";
+    const missing = !episode.audio_path || dur <= 0;
+    // Without an estimate there is nothing to compare against. Reporting that as
+    // "100% drift against a 0s script estimate" — which is what a `: 1` fallback
+    // produced — states a measurement that was never taken.
+    const comparable = !missing && est > 0;
+    const drift = comparable ? Math.abs(dur - est) / est : 0;
+    const status: CheckStatus = missing ? "fail" : !comparable ? "warn" : drift > 0.45 ? "warn" : "pass";
     checks.push({
       id: "audio_present",
       label: "Audio exists and runs to length",
       status,
       weight,
-      earned: !episode.audio_path || dur <= 0 ? 0 : drift > 0.45 ? Math.round(weight * 0.5) : weight,
-      measured:
-        !episode.audio_path || dur <= 0
-          ? "No audio file is attached to this episode."
-          : `${dur.toFixed(1)}s of audio against a ${est}s script estimate (${pct(drift * 100)} drift).`,
-      rule: "Audio must exist; drift beyond 45% of the estimate warns, because it usually means segments were dropped or truncated in synthesis.",
-      fix: !episode.audio_path ? "Synthesize the audio from the Script tab." : status === "warn" ? "Re-synthesize and check for segments the voice engine skipped." : null,
+      earned: missing ? 0 : status === "warn" ? Math.round(weight * 0.5) : weight,
+      measured: missing
+        ? "No audio file is attached to this episode."
+        : comparable
+          ? `${dur.toFixed(1)}s of audio against a ${est}s script estimate (${pct(drift * 100)} drift).`
+          : `${dur.toFixed(1)}s of audio, but the script carries no duration estimate, so the two cannot be compared.`,
+      rule: "Audio must exist; drift beyond 45% of the estimate warns, because it usually means segments were dropped or truncated in synthesis. A missing estimate also warns — an unmeasurable check is not a passing one.",
+      fix: missing
+        ? "Synthesize the audio from the Script tab."
+        : !comparable
+          ? "Regenerate the script so it carries a duration estimate, then re-synthesize."
+          : status === "warn"
+            ? "Re-synthesize and check for segments the voice engine skipped."
+            : null,
       target: status === "pass" ? null : { tab: "listen" },
     });
   }
@@ -787,7 +839,7 @@ function buildChecks(input: CheckInput): GateCheck[] {
       weight,
       earned: segCount === 0 ? 0 : scaled(100 - share, 60, 95, weight),
       measured: segCount ? `${long.length} of ${segCount} lines exceed 26 spoken words.` : "No script segments.",
-      rule: "A subtitle over roughly 26 words cannot be read in the time it is spoken. Over a quarter of lines being long warns.",
+      rule: "A subtitle over roughly 26 words cannot be read in the time it is spoken. Over a quarter of lines being long warns. Points scale between 60% and 95% of lines fitting, so a script that only just passes still earns partial credit rather than the full 5.",
       fix: status === "pass" ? null : `Split the long lines. ${long.length ? `Start with line ${long[0].index + 1}.` : ""}`.trim(),
       target: status === "pass" ? null : { tab: "script", segment: long[0]?.index },
     });
@@ -822,20 +874,18 @@ function buildChecks(input: CheckInput): GateCheck[] {
  * ------------------------------------------------------------------ */
 
 const GATE_METHOD =
-  "Nine checks over stored data, each worth a fixed number of points that sum to 100. The score is that sum — not a normalised figure, and not a model's opinion of its own work. Publication requires the score to reach 72 and no check to fail outright, so a high total cannot buy its way past an undisclosed contradiction. The model's editorial critique is shown separately and never moves the score.";
+  "Nine checks over stored data, each worth a fixed number of points that sum to 100. Several award partial credit on a sliding scale, so a check can earn 4.2 of its 5 points; the headline score is the sum of those figures rounded to the nearest whole point, which is why the parts can total slightly off the whole. The score is not a normalised figure and not a model's opinion of its own work. Publication requires the score to reach 72 and no check to fail outright, so a high total cannot buy its way past an undisclosed contradiction. The model's editorial critique is shown separately and never moves the score.";
 
-export function episodeGate(episodeId: string): EpisodeGate | null {
+export function episodeGate(episodeId: string, precomputedMedia?: EpisodeMedia | null): EpisodeGate | null {
   const ep = loadEpisode(episodeId);
   if (!ep) return null;
 
-  let script: PodcastScript | null = null;
-  try {
-    script = ep.script ? (JSON.parse(ep.script) as PodcastScript) : null;
-  } catch {
-    script = null;
-  }
+  const script = safeParse<PodcastScript | null>(ep.script, null);
 
-  const media = episodeMedia(episodeId);
+  // The media chain is the expensive half of this computation (it re-runs the
+  // citation matcher over every line). Callers that need both — the studio's gate
+  // endpoint does — pass theirs in rather than paying for it twice.
+  const media = precomputedMedia !== undefined ? precomputedMedia : episodeMedia(episodeId);
   const facts = loadFacts(ep.cluster_id);
   const contradictionPairs = countContradictionPairs(facts);
   const maxIndependent = facts.reduce((m, f) => Math.max(m, f.independent), 0);
@@ -883,45 +933,24 @@ export function episodeGate(episodeId: string): EpisodeGate | null {
 function countContradictionPairs(facts: { fact: FactRow }[]): number {
   const seen = new Set<string>();
   for (const { fact } of facts) {
-    const others = parseIdList(fact.contradicted_by);
-    for (const o of others) {
-      const key = [fact.id, o].sort().join("|");
-      seen.add(key);
+    for (const o of idList(fact.contradicted_by)) {
+      seen.add([fact.id, o].sort().join("|"));
     }
   }
   return seen.size;
 }
 
-function parseIdList(raw: string | null): string[] {
-  if (!raw) return [];
-  const s = raw.trim();
-  if (!s) return [];
-  if (s.startsWith("[")) {
-    try {
-      const v = JSON.parse(s);
-      return Array.isArray(v) ? v.map(String) : [String(v)];
-    } catch {
-      return [s];
-    }
-  }
-  return [s];
-}
-
 function advisoryFrom(raw: string | null): GateAdvisory | null {
-  if (!raw) return null;
-  try {
-    const v = JSON.parse(raw) as Record<string, unknown>;
-    const conf = typeof v.publish_confidence === "number" ? v.publish_confidence : typeof v.overall === "number" ? (v.overall as number) / 100 : null;
-    return {
-      publish_confidence: conf,
-      decision: typeof v.decision === "string" ? v.decision : typeof v.verdict === "string" ? v.verdict : null,
-      reasons: Array.isArray(v.reasons) ? v.reasons.map(String) : Array.isArray(v.strengths) ? (v.strengths as unknown[]).map(String) : [],
-      improvements: Array.isArray(v.improvements) ? (v.improvements as unknown[]).map(String) : [],
-      notes: typeof v.fact_check_notes === "string" ? v.fact_check_notes : typeof v.summary === "string" ? v.summary : "",
-    };
-  } catch {
-    return null;
-  }
+  const v = safeParse<Record<string, unknown> | null>(raw, null);
+  if (!v || typeof v !== "object") return null;
+  const conf = typeof v.publish_confidence === "number" ? v.publish_confidence : typeof v.overall === "number" ? (v.overall as number) / 100 : null;
+  return {
+    publish_confidence: conf,
+    decision: typeof v.decision === "string" ? v.decision : typeof v.verdict === "string" ? v.verdict : null,
+    reasons: Array.isArray(v.reasons) ? v.reasons.map(String) : Array.isArray(v.strengths) ? (v.strengths as unknown[]).map(String) : [],
+    improvements: Array.isArray(v.improvements) ? (v.improvements as unknown[]).map(String) : [],
+    notes: typeof v.fact_check_notes === "string" ? v.fact_check_notes : typeof v.summary === "string" ? v.summary : "",
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -936,24 +965,30 @@ function readOverride(episodeId: string): { at: number; note: string } | null {
       | { verdict: string; reasons: string; decided_at: number }
       | undefined;
     if (!row || row.verdict !== "published_with_override") return null;
-    let note = "";
-    try {
-      const list = JSON.parse(row.reasons) as unknown[];
-      const found = list.map(String).find((r) => r.startsWith(OVERRIDE_PREFIX));
-      note = found ? found.slice(OVERRIDE_PREFIX.length).trim() : "";
-    } catch {
-      note = "";
-    }
-    return { at: row.decided_at, note };
+    const found = safeArray<unknown>(row.reasons)
+      .map(String)
+      .find((r) => r.startsWith(OVERRIDE_PREFIX));
+    return { at: row.decided_at, note: found ? found.slice(OVERRIDE_PREFIX.length).trim() : "" };
   } catch {
     return null;
   }
 }
 
-/** Records the gate decision so the story page can show it without recomputing. */
+/**
+ * Records the gate decision so the story page can show it without recomputing.
+ *
+ * An existing override is never overwritten. The override row is the audit record of
+ * a human choosing to publish something the arithmetic held, and the gate is
+ * recomputed on nearly every page load — so without this guard a single visit to the
+ * studio would quietly replace "a person published this over three failing checks"
+ * with a fresh, unremarkable verdict.
+ */
 export function persistGate(gate: EpisodeGate): void {
   try {
-    getDb()
+    const db = getDb();
+    const existing = db.prepare("SELECT verdict FROM publish_gates WHERE episode_id=?").get(gate.episode_id) as { verdict: string } | undefined;
+    if (existing?.verdict === "published_with_override") return;
+    db
       .prepare("INSERT OR REPLACE INTO publish_gates (episode_id, score, verdict, reasons, decided_at) VALUES (?,?,?,?,?)")
       .run(
         gate.episode_id,

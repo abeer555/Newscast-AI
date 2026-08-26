@@ -601,8 +601,12 @@ function VerificationBar({
           ) : null}
         </span>
       </div>
-      <button className="btn sm" onClick={onVerify} disabled={verifying}>
-        {verifying ? "Re-checking…" : "Re-verify"}
+      {/* The Explain popover is itself a button, so it sits beside the action rather
+          than inside it — a button inside a button is invalid HTML and breaks hydration. */}
+      <span className="row" style={{ gap: 6, alignItems: "center" }}>
+        <button className="btn sm" onClick={onVerify} disabled={verifying}>
+          {verifying ? "Re-checking…" : "Re-verify"}
+        </button>
         <Explain title="What re-verify does" label="?" width={330}>
           <p className="ex-p">
             Re-extracts claims from every article in this story, regroups them, recounts independent reporting chains
@@ -613,7 +617,7 @@ function VerificationBar({
             check a claim.
           </p>
         </Explain>
-      </button>
+      </span>
     </div>
   );
 }
@@ -1046,15 +1050,21 @@ function DossierTab({ evidence, verifying, onVerify }: { evidence: Evidence | nu
               {expanded === f.id && (
                 <div style={{ marginTop: 11, display: "grid", gap: 8 }}>
                   {f.attestations.map((a, i) => (
-                    <a
+                    /* Not an <a> wrapper: OriginalityChip opens a popover button, and a
+                       button inside an anchor is invalid and breaks hydration. The outlet
+                       name carries the link instead. */
+                    <div
                       key={`${a.article_id}-${i}`}
-                      href={a.url}
-                      target="_blank"
-                      rel="noreferrer"
                       style={{ display: "block", padding: "10px 12px", background: "var(--panel-2)", borderRadius: 9, border: "1px solid var(--line-soft)" }}
                     >
                       <div className="row" style={{ gap: 8, marginBottom: 5 }}>
-                        <b style={{ fontSize: 12.5 }}>{a.source}</b>
+                        {a.url ? (
+                          <a href={a.url} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, fontWeight: 700 }}>
+                            {a.source}
+                          </a>
+                        ) : (
+                          <b style={{ fontSize: 12.5 }}>{a.source}</b>
+                        )}
                         <OriginalityChip originality={a.originality} label={a.chain_label} />
                         <Time at={a.published_at} mode="exact" className="dim" />
                       </div>
@@ -1063,7 +1073,7 @@ function DossierTab({ evidence, verifying, onVerify }: { evidence: Evidence | nu
                           “{a.text}”
                         </div>
                       )}
-                    </a>
+                    </div>
                   ))}
                   {!f.attestations.length && (
                     <div className="kud-empty">

@@ -451,7 +451,7 @@ input, select, textarea { font-family: inherit; }
 .est-note { font-size: 12px; color: var(--warm); display: flex; align-items: center; gap: 7px; }
 
 /* ---------- studio: script + beats ---------- */
-.seg-card { display: grid; grid-template-columns: 150px 1fr; gap: 14px; align-items: start; }
+.seg-card { display: grid; grid-template-columns: 150px 148px 1fr; gap: 14px; align-items: start; }
 .seg-meta { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--text-3); }
 .seg-text { width: 100%; background: var(--bg-2); border: 1px solid var(--line-soft); border-radius: 10px; color: var(--text); padding: 10px 12px; font-size: 14px; line-height: 1.55; resize: vertical; outline: none; font-family: inherit; }
 .seg-text:focus { border-color: var(--accent); }

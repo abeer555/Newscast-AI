@@ -203,6 +203,26 @@ export function EvidenceMini({ evidence }: { evidence: StoryEvidence | undefined
       </span>
     );
   }
+  if (evidence.claims === 0) {
+    // The evidence layer ran and found nothing to extract. Falling through to the
+    // single-chain branch below produced "All 0 extracted claims rest on one
+    // reporting chain", which is both nonsense and reassuring in the wrong direction.
+    return (
+      <span className="chip prov prov-dim">
+        no claims extracted
+        <Explain title="Checked, nothing extractable" label="?" width={340}>
+          <p className="ex-p">
+            The evidence layer ran on this story but pulled out no checkable factual claims. That usually means the
+            coverage so far is comment, analysis or a headline with no body text yet.
+          </p>
+          <p className="ex-p dim">
+            Nothing here is verified or falsified — there is simply nothing to cross-check. Re-verify once more
+            reporting lands.
+          </p>
+        </Explain>
+      </span>
+    );
+  }
   if (evidence.disputed > 0) {
     return (
       <span className="chip prov prov-warm" style={{ color: "var(--bad)", borderColor: "rgba(255,107,107,0.36)" }}>

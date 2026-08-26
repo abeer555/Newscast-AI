@@ -4,6 +4,7 @@ import { analyzeCluster } from "@/lib/intelligence";
 import { metricsFor } from "@/lib/enrich";
 import { verifyStatusOf, verifyStory } from "@/lib/verifyStory";
 import { IMPORTANCE_METHOD, SENTIMENT_METHOD, importanceBand, sentimentBand } from "@/lib/scoring";
+import { safeArray, safeParse } from "@/lib/json";
 import type { StoryIntelligence } from "@/lib/intelligence";
 
 export const maxDuration = 300;
@@ -37,13 +38,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   `).all(id) as ArticleRow[];
 
   const episodes = (db.prepare("SELECT id, title, status, language, format, audio_duration, created_at, evaluation FROM episodes WHERE cluster_id=? ORDER BY created_at DESC").all(id) as Record<string, unknown>[])
-    .map((e) => ({ ...e, evaluation: e.evaluation ? JSON.parse(e.evaluation as string) : null }));
+    .map((e) => ({ ...e, evaluation: safeParse<unknown>(e.evaluation, null) }));
 
   const sparkline = db.prepare("SELECT score, taken_at FROM trend_snapshots WHERE cluster_id=? ORDER BY taken_at ASC LIMIT 40").all(id);
 
-  db.prepare("INSERT INTO interactions (cluster_id, kind, created_at) VALUES (?,?,?)").run(id, "view", Date.now());
+  // Recording the view is a nice-to-have, not a precondition for reading the story.
+  // On a read-only deployment this write throws, and an unguarded throw here would
+  // 500 the main page of the app.
+  try {
+    db.prepare("INSERT INTO interactions (cluster_id, kind, created_at) VALUES (?,?,?)").run(id, "view", Date.now());
+  } catch { /* read-only database — view counts are not essential */ }
 
-  const intelligence = cluster.intelligence ? (JSON.parse(cluster.intelligence as string) as StoryIntelligence) : null;
+  const intelligence = safeParse<StoryIntelligence | null>(cluster.intelligence, null);
 
   // Every displayed number ships with its own derivation, so the UI never has to
   // hardcode an explanation that can drift from the maths.
@@ -69,12 +75,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       }
     : null;
 
-  const factCount = (db.prepare("SELECT COUNT(*) n FROM cluster_facts WHERE cluster_id=?").get(id) as { n: number }).n;
+  const factCount = (db.prepare("SELECT COUNT(*) n FROM cluster_facts WHERE cluster_id=?").get(id) as { n: number } | undefined)?.n ?? 0;
 
   return NextResponse.json({
     ...cluster,
-    topics: JSON.parse((cluster.topics as string) ?? "[]"),
-    entities: JSON.parse((cluster.entities as string) ?? "[]"),
+    topics: safeArray<string>(cluster.topics),
+    entities: safeArray<string>(cluster.entities),
     intelligence,
     articles,
     episodes,

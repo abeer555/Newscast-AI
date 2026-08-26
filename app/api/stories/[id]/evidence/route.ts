@@ -6,6 +6,7 @@ import { metricsFor } from "@/lib/enrich";
 import { INDEPENDENCE_METHOD, type ArticleLike } from "@/lib/independence";
 import { CONFIDENCE_METHOD, TIER_METHOD, type Attestation, type ClaimTier } from "@/lib/verification";
 import { verifyStatusOf } from "@/lib/verifyStory";
+import { safeArray, safeParse } from "@/lib/json";
 import type { StoryIntelligence } from "@/lib/intelligence";
 
 interface FactRow {
@@ -34,11 +35,18 @@ interface FactRow {
 
 const TIER_ORDER: Record<string, number> = { confirmed: 0, corroborated: 1, disputed: 2, reported: 3, unverified: 4 };
 
-/** Older rows predate the tier column; derive one so the UI never shows a blank badge. */
-function tierOf(f: FactRow): ClaimTier {
+/**
+ * Older rows predate the tier column; derive one so the UI never shows a blank badge.
+ *
+ * The fallback deliberately does NOT reach for support_count. That column counts
+ * *articles*, and ten papers running one agency dispatch would come back as
+ * "confirmed by 10 independent chains" — the exact error the independence layer exists
+ * to prevent. With no chain count on the row, the honest answer is "unverified".
+ */
+function tierOf(f: FactRow, chains: number): ClaimTier {
   if (f.tier) return f.tier as ClaimTier;
   if (f.contradicted_by) return "disputed";
-  const n = f.independent_count ?? f.support_count ?? 0;
+  const n = f.independent_count ?? chains;
   if (n >= 3) return "confirmed";
   if (n === 2) return "corroborated";
   if (n === 1) return "reported";
@@ -52,12 +60,32 @@ function parseList(raw: unknown): string[] {
   if (s.startsWith("[")) {
     try {
       const v = JSON.parse(s);
-      return Array.isArray(v) ? v.map(String) : [String(v)];
+      return Array.isArray(v) ? v.map(readable) : [readable(v)];
     } catch {
       return [s];
     }
   }
   return [s];
+}
+
+/**
+ * Renders one stored list entry as text. variants_json holds objects
+ * ({source, chain, text}), so String() on them yields "[object Object]" — which is
+ * precisely what used to appear under "Other phrasings grouped into this claim".
+ */
+function readable(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    const text = typeof o.text === "string" ? o.text : "";
+    const who = typeof o.source === "string" ? o.source : "";
+    const chain = typeof o.chain === "string" ? o.chain : "";
+    if (text && who) return chain && chain !== who ? `${who} (${chain}): “${text}”` : `${who}: “${text}”`;
+    if (text) return text;
+    if (who) return who;
+  }
+  return String(v);
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -68,7 +96,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     .get(id) as { id: string; title: string; intelligence: string | null; first_seen: number; last_updated: number } | undefined;
   if (!cluster) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  const intelligence = cluster.intelligence ? (JSON.parse(cluster.intelligence) as StoryIntelligence) : null;
+  const intelligence = safeParse<StoryIntelligence | null>(cluster.intelligence, null);
 
   const factRows = db
     .prepare("SELECT * FROM cluster_facts WHERE cluster_id=?")
@@ -76,28 +104,29 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const facts = factRows
     .map((f) => {
-      let attestations: Attestation[] = [];
-      try {
-        attestations = JSON.parse(f.attestation_json) as Attestation[];
-      } catch {
-        attestations = [];
-      }
-      const tier = tierOf(f);
+      const attestations = safeArray<Attestation>(f.attestation_json);
       const outletNames = [...new Set(attestations.map((a) => a.source).filter(Boolean))];
       const chains = [...new Set(attestations.map((a) => a.chain_label).filter(Boolean))];
+      const independent = f.independent_count ?? chains.length;
+      const tier = tierOf(f, chains.length);
       return {
         id: f.id,
         claim: f.claim,
         tier,
         tier_label: TIER_METHOD[tier],
+        // The fallback quotes the same number the response reports as
+        // independent_count — quoting support_count here would describe articles as
+        // reporting chains.
         tier_reason:
           f.tier_reason ??
-          `${f.independent_count ?? f.support_count} independent reporting ${(f.independent_count ?? f.support_count) === 1 ? "chain" : "chains"} carried this claim.`,
+          (independent > 0
+            ? `${independent} independent reporting ${independent === 1 ? "chain" : "chains"} carried this claim.`
+            : "No reporting chain is recorded for this claim, so it is shown as unverified."),
         status: f.status,
         confidence: f.confidence,
         support_count: f.support_count,
         outlet_count: f.outlet_count ?? outletNames.length,
-        independent_count: f.independent_count ?? chains.length ?? 0,
+        independent_count: independent,
         outlets: outletNames,
         chains,
         origins: parseList(f.canonical_origins),
@@ -145,13 +174,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     .prepare("SELECT * FROM publish_gates WHERE episode_id IN (SELECT id FROM episodes WHERE cluster_id=?) ORDER BY decided_at DESC")
     .all(id) as Record<string, unknown>[]).map((g) => ({
     ...g,
-    reasons: (() => {
-      try {
-        return JSON.parse(String(g.reasons));
-      } catch {
-        return [];
-      }
-    })(),
+    reasons: safeArray<unknown>(g.reasons),
   }));
 
   const coverage = analyzeCoverage(id, intelligence);
@@ -212,16 +235,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       disagreements: intelligence?.disagreements ?? [],
       updated_at: editorial?.updated_at ?? null,
     },
-    living_story: living ? { ...living, timeline: JSON.parse(String(living.timeline)) } : null,
+    living_story: living ? { ...living, timeline: safeArray<unknown>(living.timeline) } : null,
     editorial: editorial
       ? {
-          bias_json: (() => {
-            try {
-              return JSON.parse(String(editorial.bias_json));
-            } catch {
-              return [];
-            }
-          })(),
+          bias_json: safeArray<unknown>(editorial.bias_json),
           updated_at: editorial.updated_at,
         }
       : null,

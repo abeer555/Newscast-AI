@@ -9,6 +9,9 @@ type DemoBeat = {
   caption: string;
   duration: number;
   segment_range: [number, number];
+  /** Provenance of the frame. The seeded video was rendered locally from prompts,
+   *  so every frame of it is a generated illustration and is labelled as one. */
+  image_source: "ai_generated" | "article";
 };
 
 const DEMO_EPOCH = Date.now();
@@ -18,18 +21,30 @@ const GLOBAL_EPISODE_ID = "bd8bc5d60e01f616";
 
 function readStoryboard(): { style: string; aspect: string; beats: DemoBeat[]; total_duration: number } {
   const storyboardPath = path.join(process.cwd(), "data", "logs", "storyboard_bd8bc5d60e01f616.json");
+  const fallback = {
+    style: "cinematic editorial news illustration",
+    aspect: "16:9",
+    total_duration: 117,
+    beats: [
+      {
+        index: 0,
+        image_prompt: "newsroom anchor desk",
+        negative_prompt: "text",
+        caption: "Briefing begins",
+        duration: 11.7,
+        segment_range: [0, 0] as [number, number],
+        image_source: "ai_generated" as const,
+      },
+    ],
+  };
   try {
     const raw = fs.readFileSync(storyboardPath, "utf8");
-    return JSON.parse(raw) as { style: string; aspect: string; beats: DemoBeat[]; total_duration: number };
+    const board = JSON.parse(raw) as { style: string; aspect: string; beats: DemoBeat[]; total_duration: number };
+    // The stored board predates provenance tracking. Stamping it here is not a guess:
+    // this episode was rendered in "local" mode, which draws every frame from a prompt.
+    return { ...board, beats: (board.beats ?? []).map((b) => ({ ...b, image_source: "ai_generated" as const })) };
   } catch {
-    return {
-      style: "cinematic editorial news illustration",
-      aspect: "16:9",
-      total_duration: 117,
-      beats: [
-        { index: 0, image_prompt: "newsroom anchor desk", negative_prompt: "text", caption: "Briefing begins", duration: 11.7, segment_range: [0, 0] },
-      ],
-    };
+    return fallback;
   }
 }
 
@@ -115,55 +130,294 @@ export function seedDemoData(db: Database.Database) {
     ],
   };
 
+  /* ------------------------------------------------------------------ *
+   * Evidence fixtures
+   *
+   * These rows are shaped exactly as lib/verification.ts writes them, because the
+   * dossier, the claim tiers, the inline citations, evidence-backed playback and the
+   * publish gate all read the same columns. Seeding the old two-field attestation
+   * shape left the demo with claims that had no reporting chains, which made every
+   * tier badge read "unverified" and the gate hold a perfectly good episode.
+   *
+   * `chain` is the unit that matters: two outlets in the same chain are one piece of
+   * reporting. The Guardian's attestation on the second claim is deliberately a
+   * syndicated copy of the AP dispatch, so the demo shows three outlets resolving to
+   * two independent chains rather than pretending to be triple-sourced.
+   *
+   * Tiers and confidences here are the values tierFor() and claimConfidence() in
+   * lib/verification.ts produce for these chain counts — the reasons are quoted from
+   * them verbatim so the fixture cannot drift into claiming something the documented
+   * rules would not.
+   * ------------------------------------------------------------------ */
+
+  const OUTLET_NAME: Record<string, string> = {
+    ap: "AP", bbc: "BBC", aljazeera: "Al Jazeera", guardian: "Guardian",
+    hindu: "The Hindu", ndtv: "NDTV", theprint: "ThePrint",
+  };
+  const CHAIN: Record<string, { chain: string; chain_label: string; originality: string }> = {
+    ap: { chain: "wire:ap", chain_label: "AP wire", originality: "wire_origin" },
+    bbc: { chain: "outlet:bbc", chain_label: "BBC's own reporting", originality: "original" },
+    aljazeera: { chain: "outlet:aljazeera", chain_label: "Al Jazeera's own reporting", originality: "original" },
+    guardian: { chain: "outlet:guardian", chain_label: "Guardian's own reporting", originality: "original" },
+    hindu: { chain: "outlet:hindu", chain_label: "The Hindu's own reporting", originality: "original" },
+    ndtv: { chain: "outlet:ndtv", chain_label: "NDTV's own reporting", originality: "original" },
+    theprint: { chain: "outlet:theprint", chain_label: "ThePrint's own reporting", originality: "original" },
+  };
+  const articleBySource = new Map([...globalArticles, ...indiaArticles].map((a) => [a.source_id, a]));
+
+  /** One outlet's attestation of a claim, in its own words. */
+  const attest = (sourceId: string, text: string, carriedFrom?: string) => {
+    const article = articleBySource.get(sourceId);
+    const own = CHAIN[sourceId];
+    const chainOf = carriedFrom ? CHAIN[carriedFrom] : own;
+    return {
+      article_id: article?.id ?? `demo-${sourceId}`,
+      source: OUTLET_NAME[sourceId] ?? sourceId,
+      source_id: sourceId,
+      url: article?.url ?? "",
+      published_at: article?.published_at ?? now,
+      chain: chainOf.chain,
+      chain_label: chainOf.chain_label,
+      // A syndicated copy belongs to the chain it came from, not to the outlet
+      // that reprinted it — that is the whole point of the distinction.
+      originality: carriedFrom ? "syndicated" : own.originality,
+      text,
+    };
+  };
+
+  type DemoAttestation = ReturnType<typeof attest>;
+
+  const TIER_REASON: Record<string, string> = {
+    confirmed_4: "Reported independently by 4 separate reporting chains, so it does not rest on any single newsroom's account.",
+    confirmed_3: "Reported independently by 3 separate reporting chains, so it does not rest on any single newsroom's account.",
+    corroborated: "Two independent newsrooms report this. Corroborated, but one short of the three-chain bar for confirmation.",
+    reported_1: "Single reporting chain.",
+    reported_syndicated: "Single reporting chain. 2 outlets carry it, but they trace to one original report, so the extra outlets add reach rather than evidence.",
+    disputed: "Another outlet in this story asserts the opposite, or gives a conflicting figure. Both versions are shown rather than one being picked.",
+  };
+
+  const fact = (
+    id: string,
+    claim: string,
+    tier: "confirmed" | "corroborated" | "reported" | "disputed",
+    tierReason: string,
+    confidence: number,
+    topic: string,
+    atts: DemoAttestation[],
+    contradicts?: string[],
+  ) => {
+    const chains = [...new Set(atts.map((a) => a.chain))];
+    const outlets = [...new Set(atts.map((a) => a.source_id))];
+    const sorted = [...atts].sort((a, b) => a.published_at - b.published_at);
+    return {
+      id,
+      claim,
+      // The legacy status column is kept in step with the tier for older readers.
+      status: tier === "corroborated" ? "reported" : tier,
+      tier,
+      tier_reason: tierReason,
+      support_count: atts.length,
+      outlet_count: outlets.length,
+      independent_count: chains.length,
+      attestation_json: JSON.stringify(sorted),
+      canonical_origins: JSON.stringify([...new Set(sorted.map((a) => a.chain_label))]),
+      contradicted_by: contradicts?.length ? JSON.stringify(contradicts) : null,
+      confidence,
+      topic,
+      first_reported_by: sorted[0]?.source ?? null,
+      first_reported_at: sorted[0]?.published_at ?? null,
+      variants_json: JSON.stringify(
+        [...new Map(sorted.map((a) => [a.chain, { source: a.source, chain: a.chain_label, text: a.text }])).values()],
+      ),
+      first_seen: sorted[0]?.published_at ?? now - 6 * 60 * 60 * 1000,
+      last_seen: now - 45 * 60 * 1000,
+    };
+  };
+
   const globalFacts = [
-    {
-      id: "fact-gaza-1",
-      claim: "Multiple outlets describe the proposal as a phased ceasefire framework rather than a finalized treaty.",
-      status: "confirmed",
-      support_count: 4,
-      attestation_json: JSON.stringify([
-        { source: "AP", attestations: 3, url: "https://apnews.com/", original: true },
-        { source: "BBC", attestations: 2, url: "https://www.bbc.com/news", original: true },
-      ]),
-      canonical_origins: JSON.stringify(["AP", "BBC"]),
-      contradicted_by: null,
-      confidence: 0.94,
-      first_seen: now - 5 * 60 * 60 * 1000,
-      last_seen: now - 60 * 60 * 1000,
-    },
-    {
-      id: "fact-gaza-2",
-      claim: "The hardest open question is how verification and disarmament would work on the ground.",
-      status: "reported",
-      support_count: 3,
-      attestation_json: JSON.stringify([
-        { source: "Al Jazeera", attestations: 2, url: "https://www.aljazeera.com/news", original: true },
-        { source: "Guardian", attestations: 1, url: "https://www.theguardian.com/world", original: true },
-      ]),
-      canonical_origins: JSON.stringify(["Al Jazeera", "Guardian"]),
-      contradicted_by: null,
-      confidence: 0.82,
-      first_seen: now - 4 * 60 * 60 * 1000,
-      last_seen: now - 90 * 60 * 1000,
-    },
+    fact(
+      "fact-gaza-1",
+      "The Gaza plan is being treated as a negotiating framework.",
+      "confirmed",
+      TIER_REASON.confirmed_4,
+      0.99,
+      "diplomacy",
+      [
+        attest("ap", "Officials describe the 15-point document as a negotiating framework, not a signed agreement."),
+        attest("bbc", "Diplomats are treating the plan as a framework for negotiation rather than a concluded deal."),
+        attest("aljazeera", "The proposal is being handled as an opening negotiating position."),
+        attest("guardian", "Whitehall sources call it a negotiating framework whose details are still open."),
+      ],
+    ),
+    fact(
+      "fact-gaza-2",
+      "A phased pause in fighting and a hostage-prisoner exchange are in the outline.",
+      "corroborated",
+      TIER_REASON.corroborated,
+      0.99,
+      "ceasefire terms",
+      [
+        attest("ap", "The outline pairs a phased pause in fighting with a hostage-prisoner exchange."),
+        attest("guardian", "The outline pairs a phased pause in fighting with a hostage-prisoner exchange.", "ap"),
+        attest("bbc", "BBC understands the sequencing begins with a staged halt to fighting alongside an exchange of hostages and prisoners."),
+      ],
+    ),
+    fact(
+      "fact-gaza-3",
+      "The plan has enough structure to attract attention but not enough detail to settle implementation questions.",
+      "confirmed",
+      TIER_REASON.confirmed_3,
+      0.99,
+      "implementation",
+      [
+        attest("ap", "The document is specific on principles and thin on implementation."),
+        attest("bbc", "There is structure here, but the operational detail that would make it work is missing."),
+        attest("aljazeera", "The framework attracts attention precisely because the hard details are unresolved."),
+      ],
+    ),
+    fact(
+      "fact-gaza-4",
+      "The details decide whether this becomes a durable process.",
+      "corroborated",
+      TIER_REASON.corroborated,
+      0.97,
+      "implementation",
+      [
+        attest("bbc", "Whether this becomes durable depends on details not yet written down."),
+        attest("guardian", "Analysts say the detail, not the announcement, decides whether the process lasts."),
+      ],
+    ),
+    fact(
+      "fact-gaza-5",
+      "There is a lack of clarity around aid delivery and supervision.",
+      "confirmed",
+      TIER_REASON.confirmed_3,
+      0.99,
+      "humanitarian",
+      [
+        attest("aljazeera", "Aid agencies say delivery routes and supervision are undefined."),
+        attest("guardian", "Humanitarian groups cannot see who would supervise aid delivery under the plan."),
+        attest("bbc", "The plan does not specify how aid would be delivered or monitored."),
+      ],
+    ),
+    fact(
+      "fact-gaza-6",
+      "Hawkish coverage focuses on security guarantees and disarmament.",
+      "corroborated",
+      TIER_REASON.corroborated,
+      0.97,
+      "security",
+      [
+        attest("ap", "Security guarantees and disarmament dominate the more hawkish commentary."),
+        attest("guardian", "Hawkish readings of the plan centre on disarmament and security guarantees."),
+      ],
+    ),
+    fact(
+      "fact-gaza-7",
+      "Outlets do not agree on whether it is enforceable, balanced, or politically survivable.",
+      "confirmed",
+      TIER_REASON.confirmed_3,
+      0.99,
+      "assessment",
+      [
+        attest("bbc", "Assessments diverge on enforceability and political survivability."),
+        attest("aljazeera", "Commentators disagree on whether the plan is balanced."),
+        attest("guardian", "There is no agreement on whether the plan can be enforced or survive politically."),
+      ],
+    ),
+    fact(
+      "fact-gaza-8",
+      "Regional intermediaries could turn the plan into a mechanism.",
+      "corroborated",
+      TIER_REASON.corroborated,
+      0.97,
+      "diplomacy",
+      [
+        attest("ap", "Regional intermediaries are the route from plan to mechanism."),
+        attest("bbc", "Mediators in the region would have to convert the plan into a working mechanism."),
+      ],
+    ),
+    fact(
+      "fact-gaza-9",
+      "If guarantees do not materialize the narrative will shift from diplomacy to escalation risk.",
+      "reported",
+      TIER_REASON.reported_1,
+      0.52,
+      "risk",
+      [attest("guardian", "Absent firm guarantees, the story returns to escalation risk within weeks.")],
+    ),
+    fact(
+      "fact-gaza-10",
+      "Israeli officials have accepted the verification mechanism in principle.",
+      "disputed",
+      TIER_REASON.disputed,
+      0.52,
+      "verification",
+      [attest("ap", "Israeli officials have signalled acceptance of the verification mechanism in principle.")],
+      ["fact-gaza-11"],
+    ),
+    fact(
+      "fact-gaza-11",
+      "Israeli officials have not agreed to any verification mechanism.",
+      "disputed",
+      TIER_REASON.disputed,
+      0.52,
+      "verification",
+      [attest("aljazeera", "Israeli officials deny agreeing to a verification mechanism at this stage.")],
+      ["fact-gaza-10"],
+    ),
   ];
 
   const indiaFacts = [
-    {
-      id: "fact-india-1",
-      claim: "Market coverage is centered on policy expectations rather than a single earnings shock.",
-      status: "confirmed",
-      support_count: 3,
-      attestation_json: JSON.stringify([
-        { source: "The Hindu", attestations: 1, url: "https://www.thehindu.com/", original: true },
-        { source: "NDTV", attestations: 1, url: "https://www.ndtv.com/", original: true },
-      ]),
-      canonical_origins: JSON.stringify(["The Hindu", "NDTV"]),
-      contradicted_by: null,
-      confidence: 0.9,
-      first_seen: now - 6 * 60 * 60 * 1000,
-      last_seen: now - 2 * 60 * 60 * 1000,
-    },
+    fact(
+      "fact-india-1",
+      "Investors are watching policy cues and broader growth signals.",
+      "confirmed",
+      TIER_REASON.confirmed_3,
+      0.99,
+      "policy",
+      [
+        attest("hindu", "Investors are focused on policy cues rather than a single earnings print."),
+        attest("ndtv", "The market is trading on growth signals and policy expectations."),
+        attest("theprint", "Attention is on the policy path and the broader growth picture."),
+      ],
+    ),
+    fact(
+      "fact-india-2",
+      "Inflation is not giving a dramatic surprise, which keeps rate-cut talk alive.",
+      "corroborated",
+      TIER_REASON.corroborated,
+      0.97,
+      "inflation",
+      [
+        attest("hindu", "The inflation print held close to expectations, keeping rate-cut hopes intact."),
+        attest("ndtv", "No inflation shock means the rate-cut conversation continues."),
+      ],
+    ),
+    fact(
+      "fact-india-3",
+      "The strongest coverage themes are capex, banking, and tech.",
+      "corroborated",
+      TIER_REASON.corroborated,
+      0.97,
+      "sectors",
+      [
+        attest("ndtv", "Banking and tech led the tape, with capex the recurring theme."),
+        attest("theprint", "Capex, lenders and technology dominate the coverage."),
+      ],
+    ),
+    fact(
+      "fact-india-4",
+      "The trade is less about a single headline and more about the macro backdrop.",
+      "corroborated",
+      TIER_REASON.corroborated,
+      0.97,
+      "macro",
+      [
+        attest("theprint", "This is a macro trade, not a headline trade."),
+        attest("hindu", "The move reflects the macro backdrop rather than any one announcement."),
+      ],
+    ),
   ];
 
   const tx = db.transaction(() => {
@@ -171,10 +425,23 @@ export function seedDemoData(db: Database.Database) {
     const insertCluster = db.prepare("INSERT INTO clusters (id, title, canonical_article_id, category, topics, entities, trend_score, velocity, first_seen, last_updated, intelligence, intelligence_at, pipeline_stage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
     const insertClusterArticle = db.prepare("INSERT INTO cluster_articles (cluster_id, article_id, similarity) VALUES (?,?,?)");
     const insertEpisode = db.prepare("INSERT INTO episodes (id, cluster_id, title, format, language, style, status, progress, stage_label, script, script_model, script_hash, audio_path, audio_duration, audio_segments, storyboard, video_path, video_duration, video_status, video_error, video_mode, evaluation, play_count, created_at, updated_at, published_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-    const insertFact = db.prepare("INSERT INTO cluster_facts (id, cluster_id, claim, claim_hash, status, support_count, attestation_json, canonical_origins, contradicted_by, confidence, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    // Seeding runs from migrate() immediately after the additive migrations, so the
+    // evidence columns are guaranteed to exist by the time this statement is prepared.
+    const insertFact = db.prepare(
+      "INSERT INTO cluster_facts (id, cluster_id, claim, claim_hash, status, tier, tier_reason, support_count, outlet_count, independent_count, attestation_json, canonical_origins, contradicted_by, confidence, topic, first_reported_by, first_reported_at, variants_json, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
+    const runFact = (clusterId: string, f: (typeof globalFacts)[number]) =>
+      insertFact.run(
+        f.id, clusterId, f.claim, `${clusterId}:${f.id}`, f.status, f.tier, f.tier_reason,
+        f.support_count, f.outlet_count, f.independent_count, f.attestation_json, f.canonical_origins,
+        f.contradicted_by, f.confidence, f.topic, f.first_reported_by, f.first_reported_at,
+        f.variants_json, f.first_seen, f.last_seen,
+      );
     const insertLiving = db.prepare("INSERT INTO living_story (cluster_id, current_summary, current_summary_at, version, timeline, last_fused_at) VALUES (?,?,?,?,?,?)");
     const insertEditorial = db.prepare("INSERT INTO editorials (cluster_id, bias_json, whats_solid, whats_contested, whats_unknown, updated_at) VALUES (?,?,?,?,?,?)");
-    const insertGate = db.prepare("INSERT INTO publish_gates (episode_id, score, verdict, reasons, decided_at) VALUES (?,?,?,?,?)");
+    // No seeded publish_gates row: the gate is computed from the stored evidence by
+    // lib/gates.ts on demand, and a hardcoded verdict here would be a claim the
+    // arithmetic had not actually made.
     const insertAnalytics = db.prepare("INSERT INTO analytics_events (kind, model, tokens_prompt, tokens_completion, latency_ms, meta, created_at) VALUES (?,?,?,?,?,?,?)");
 
     for (const article of globalArticles) {
@@ -234,7 +501,7 @@ export function seedDemoData(db: Database.Database) {
       "analyzed"
     );
     for (const article of globalArticles) insertClusterArticle.run(GLOBAL_CLUSTER_ID, article.id, article.id === globalArticleIds[0] ? 1 : 0.88);
-    for (const fact of globalFacts) insertFact.run(fact.id, GLOBAL_CLUSTER_ID, fact.claim, `${GLOBAL_CLUSTER_ID}:${fact.id}`, fact.status, fact.support_count, fact.attestation_json, fact.canonical_origins, fact.contradicted_by, fact.confidence, fact.first_seen, fact.last_seen);
+    for (const fact of globalFacts) runFact(GLOBAL_CLUSTER_ID, fact);
     insertLiving.run(
       GLOBAL_CLUSTER_ID,
       "A diplomatic framework is circulating, but the crucial work remains in the verification and implementation details. Every outlet agrees the moment matters; they diverge on whether the plan can survive first contact with the facts on the ground.",
@@ -310,7 +577,7 @@ export function seedDemoData(db: Database.Database) {
       "analyzed"
     );
     for (const article of indiaArticles) insertClusterArticle.run(INDIA_CLUSTER_ID, article.id, article.id === indiaArticleIds[0] ? 1 : 0.9);
-    for (const fact of indiaFacts) insertFact.run(fact.id, INDIA_CLUSTER_ID, fact.claim, `${INDIA_CLUSTER_ID}:${fact.id}`, fact.status, fact.support_count, fact.attestation_json, fact.canonical_origins, fact.contradicted_by, fact.confidence, fact.first_seen, fact.last_seen);
+    for (const fact of indiaFacts) runFact(INDIA_CLUSTER_ID, fact);
     insertLiving.run(
       INDIA_CLUSTER_ID,
       "India market coverage is treating the day as constructive, with policy expectations, capex, and demand dynamics all pointing in roughly the same direction.",
@@ -411,7 +678,13 @@ export function seedDemoData(db: Database.Database) {
       now - 75 * 60 * 1000,
     );
 
-    insertGate.run(GLOBAL_EPISODE_ID, 0.91, "publish", JSON.stringify(["Seeded demo publish gate"]), now - 90 * 60 * 1000);
+    // Both seeded stories ship with their evidence already in place, so mark them
+    // verified — otherwise the dossier and the pulse would report that verification
+    // has never run for stories whose claims are sitting right there.
+    const markVerified = db.prepare("UPDATE clusters SET verify_status='done', verified_at=? WHERE id=?");
+    markVerified.run(now - 45 * 60 * 1000, GLOBAL_CLUSTER_ID);
+    markVerified.run(now - 40 * 60 * 1000, INDIA_CLUSTER_ID);
+
     insertAnalytics.run("llm_call", "openai/gpt-oss-120b", 1520, 810, 1240, JSON.stringify({ episodeId: GLOBAL_EPISODE_ID }), now - 95 * 60 * 1000);
     insertAnalytics.run("tts_call", "kokoro/af_heart", 0, 0, 680, JSON.stringify({ chars: 4200, episodeId: GLOBAL_EPISODE_ID }), now - 94 * 60 * 1000);
     insertAnalytics.run("cluster", null, 0, 0, 210, JSON.stringify({ clusterId: GLOBAL_CLUSTER_ID }), now - 93 * 60 * 1000);

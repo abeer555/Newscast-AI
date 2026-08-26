@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { enrichStories } from "@/lib/enrich";
 import { evidenceForClusters, newsPulse, type PulseKey } from "@/lib/pulse";
+import { safeArray } from "@/lib/json";
 
 interface StoryRow extends Record<string, unknown> {
   id: string;
@@ -66,7 +67,7 @@ export function GET(req: NextRequest) {
 
   let stories = enrichStories(rows).map((r) => ({
     ...r,
-    topics: JSON.parse(r.topics ?? "[]") as string[],
+    topics: safeArray<string>(r.topics),
     sources: (r.sources ?? "").split(",").filter(Boolean),
     has_intel: !!r.has_intel,
     personal_score: 0,
@@ -92,7 +93,7 @@ export function GET(req: NextRequest) {
 
   if (personalized) {
     const prof = db.prepare("SELECT interests FROM user_profile WHERE id='local'").get() as { interests: string } | undefined;
-    const interests: string[] = prof ? JSON.parse(prof.interests) : [];
+    const interests = safeArray<unknown>(prof?.interests).filter((i): i is string => typeof i === "string");
     const inter = db.prepare("SELECT cluster_id, COUNT(*) n FROM interactions WHERE created_at > ? GROUP BY cluster_id").all(Date.now() - 7 * 86400e3) as { cluster_id: string; n: number }[];
     const boost = new Map(inter.map((i) => [i.cluster_id, i.n]));
     stories = stories

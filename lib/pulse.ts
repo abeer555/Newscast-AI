@@ -70,9 +70,9 @@ function columnsOf(table: string): Set<string> {
 /**
  * Per-story claim tiers, keyed by cluster id.
  *
- * Tiers are read from the stored column when it exists and derived from support
- * counts when it does not, matching the fallback in the evidence route so the two
- * surfaces can never disagree.
+ * Tiers are read from the stored column when it exists. When it does not, they are
+ * derived from the independent-chain count only — never from the article count —
+ * matching the fallback in the evidence route so the two surfaces cannot disagree.
  */
 export function evidenceForClusters(ids: string[]): Map<string, ClusterEvidence> {
   const out = new Map<string, ClusterEvidence>();
@@ -86,12 +86,11 @@ export function evidenceForClusters(ids: string[]): Map<string, ClusterEvidence>
     "cluster_id",
     hasTier ? "tier" : "NULL AS tier",
     hasIndep ? "independent_count" : "NULL AS independent_count",
-    "support_count",
     "contradicted_by",
   ].join(", ");
 
   const placeholders = ids.map(() => "?").join(",");
-  let rows: { cluster_id: string; tier: string | null; independent_count: number | null; support_count: number; contradicted_by: string | null }[] = [];
+  let rows: { cluster_id: string; tier: string | null; independent_count: number | null; contradicted_by: string | null }[] = [];
   try {
     rows = db
       .prepare(`SELECT ${select} FROM cluster_facts WHERE cluster_id IN (${placeholders})`)
@@ -114,6 +113,7 @@ export function evidenceForClusters(ids: string[]): Map<string, ClusterEvidence>
   // verify_status is the authoritative "has the evidence layer run" signal; the
   // presence of claims alone can be left over from an earlier schema.
   const statusCol = columnsOf("clusters");
+  let statusKnown = false;
   if (statusCol.has("verify_status")) {
     try {
       const st = db
@@ -124,13 +124,17 @@ export function evidenceForClusters(ids: string[]): Map<string, ClusterEvidence>
         e.verified = s.verify_status === "done";
         out.set(s.id, e);
       }
+      statusKnown = true;
     } catch {
       /* pre-migration database — fall through to the claim-count heuristic */
     }
   }
 
   for (const [id, e] of out) {
-    if (!e.verified && e.claims > 0) e.verified = true;
+    // The heuristic only applies where there is no authoritative column to read.
+    // Applying it anyway would let leftover claims from an older run overrule a
+    // verify_status of "pending" or "error" and report an unchecked story as checked.
+    if (!statusKnown && !e.verified && e.claims > 0) e.verified = true;
     e.best_tier =
       e.disputed > 0 ? "disputed"
         : e.confirmed > 0 ? "confirmed"
@@ -142,9 +146,17 @@ export function evidenceForClusters(ids: string[]): Map<string, ClusterEvidence>
   return out;
 }
 
-function deriveTier(r: { independent_count: number | null; support_count: number; contradicted_by: string | null }): string {
+/**
+ * Tier for a row written before the tier column existed.
+ *
+ * support_count is deliberately not consulted. It counts articles, so a wire story
+ * reprinted by eight papers would be derived here as "confirmed" — presenting one
+ * account as eight independent ones on the front page. With no chain count stored,
+ * "unverified" is the only honest answer.
+ */
+function deriveTier(r: { independent_count: number | null; contradicted_by: string | null }): string {
   if (r.contradicted_by) return "disputed";
-  const n = r.independent_count ?? r.support_count ?? 0;
+  const n = r.independent_count ?? 0;
   if (n >= 3) return "confirmed";
   if (n === 2) return "corroborated";
   if (n === 1) return "reported";
@@ -238,7 +250,11 @@ export function newsPulse(opts: { windowHours?: number; now?: number } = {}): Ne
     },
     {
       key: "corroborated",
-      label: "Corroborated",
+      // Not labelled "Corroborated": in the tier vocabulary that word means two
+      // chains, and this facet counts stories holding a claim on three or more.
+      // Reusing the weaker word for the stronger bar reads as an understatement,
+      // and the tier badges elsewhere would contradict it.
+      label: "Independently confirmed",
       count: corroborated.length,
       tone: "good",
       detail: "At least one claim confirmed by three or more independent reporting chains.",
@@ -278,7 +294,7 @@ export function newsPulse(opts: { windowHours?: number; now?: number } = {}): Ne
   const subParts: string[] = [`across ${outlets} ${plural(outlets, "outlet", "outlets")}`, `${articles} ${plural(articles, "filing", "filings")}`];
   if (developing.length === 0 && rows.length > 0) subParts.push(`nothing new in ${DEVELOPING_HOURS}h`);
   if (contested.length) subParts.push(`${contested.length} with conflicting accounts`);
-  if (corroborated.length) subParts.push(`${corroborated.length} corroborated by 3+ chains`);
+  if (corroborated.length) subParts.push(`${corroborated.length} confirmed by 3+ independent chains`);
   if (single.length) subParts.push(`${single.length} resting on a single outlet`);
   if (unchecked.length === rows.length && rows.length > 0) subParts.push("none checked against the evidence layer yet");
 

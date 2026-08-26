@@ -574,27 +574,26 @@ async function renderVideoForEpisode(
   // let it, not the render, decide the episode's status. An episode held for an
   // undisclosed contradiction does not become publishable because a video finished.
   let label = "Ready with video";
+  let cleared = true;
   try {
     const gate = episodeGate(episodeId);
     if (gate) {
       persistGate(gate);
-      const cleared = gate.verdict === "publish";
+      cleared = gate.verdict === "publish";
       label = cleared ? "Ready with video" : `Held — ${gate.headline.replace(/^Held: /, "")}`;
-      setEpisode(episodeId, {
-        status: cleared ? "ready" : "needs_review",
-        progress: cleared ? 1 : 0.95,
-        stage_label: label,
-        published_at: cleared ? Date.now() : null,
-      });
-    } else {
-      setEpisode(episodeId, { status: "ready", progress: 1, stage_label: label });
     }
   } catch {
     // A gate failure must not strand the episode mid-pipeline when the video exists.
-    setEpisode(episodeId, { status: "ready", progress: 1, stage_label: label });
+    cleared = true;
   }
+  setEpisode(episodeId, {
+    status: cleared ? "ready" : "needs_review",
+    progress: cleared ? 1 : 0.95,
+    stage_label: label,
+    published_at: cleared ? Date.now() : null,
+  });
 
-  episodeProgress(episodeId, "ready", 1, label, { video: out.publicPath });
+  episodeProgress(episodeId, cleared ? "ready" : "needs_review", cleared ? 1 : 0.95, label, { video: out.publicPath });
   logEvent("pipeline", `Video ready for ${episodeId}: ${out.durationSec}s at ${out.publicPath} (${label})`);
 }
 

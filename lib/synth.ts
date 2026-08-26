@@ -31,10 +31,14 @@ const AUDIO_DIR = path.join(process.cwd(), "public", "audio");
 /** Voiced utterances, keyed by content hash, so an edit re-voices only what changed. */
 const TTS_CACHE_DIR = path.join(process.cwd(), "data", "tts-cache");
 
-// Try to create directories, but don't fail on read-only filesystems (e.g. Vercel)
+// Try to create directories, but don't fail on read-only filesystems (e.g. Vercel).
+// The turbopackIgnore markers matter: these are runtime *output* directories, and
+// without them the bundler's static analysis gives up on the dynamic path and traces
+// the entire project into the serverless bundle, which on Vercel means shipping every
+// source file and audio asset with the function and eventually blowing the size limit.
 for (const dir of [AUDIO_DIR, TTS_CACHE_DIR]) {
   try {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(/* turbopackIgnore: true */ dir)) fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true });
   } catch {
     // Read-only filesystem — audio files should already exist in git
   }

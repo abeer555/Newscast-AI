@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { safeParse } from "@/lib/json";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -8,23 +9,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   if (!ep) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json({
     ...ep,
-    script: ep.script ? JSON.parse(ep.script as string) : null,
-    evaluation: ep.evaluation ? JSON.parse(ep.evaluation as string) : null,
-    storyboard: ep.storyboard ? JSON.parse(ep.storyboard as string) : null,
-    visual_provenance: ep.visual_provenance ? safeParse(ep.visual_provenance as string) : null,
+    script: safeParse<unknown>(ep.script, null),
+    evaluation: safeParse<unknown>(ep.evaluation, null),
+    storyboard: safeParse<unknown>(ep.storyboard, null),
+    visual_provenance: safeParse<unknown>(ep.visual_provenance, null),
     generation_cache: undefined,
     // The raw timeline is large and only useful via /gate, which returns
     // per-segment bounds already resolved.
     audio_timeline: undefined,
   });
-}
-
-function safeParse(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
 }
 
 /** PATCH: update script segments / title (user edits in the studio) */

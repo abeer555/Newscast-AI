@@ -13,10 +13,14 @@ import { episodeGate, episodeMedia, persistGate, recordOverride } from "@/lib/ga
  */
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const gate = episodeGate(id);
-  if (!gate) return NextResponse.json({ error: "not found" }, { status: 404 });
+  // Computed once and handed to the gate, which needs the same chain: this is the
+  // expensive request in the studio and it used to run the citation matcher twice.
   const media = episodeMedia(id);
-  persistGate(gate);
+  const gate = episodeGate(id, media);
+  if (!gate) return NextResponse.json({ error: "not found" }, { status: 404 });
+  // No write here. A GET used to persist the recomputed verdict, which on a page
+  // that polls meant every visit overwrote the stored decision — including the
+  // audit row recording that a human had published over a blocked gate.
   return NextResponse.json({ gate, media });
 }
 
@@ -37,12 +41,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     body = {};
   }
 
-  const gate = episodeGate(id);
+  const media = episodeMedia(id);
+  const gate = episodeGate(id, media);
   if (!gate) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   if (!body.approve) {
     persistGate(gate);
-    return NextResponse.json({ gate, media: episodeMedia(id) });
+    return NextResponse.json({ gate, media });
   }
 
   const note = (body.note ?? "").trim();
@@ -78,6 +83,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: `Could not publish: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 });
   }
 
-  const after = episodeGate(id);
-  return NextResponse.json({ gate: after ?? gate, media: episodeMedia(id), overridden: !passing });
+  // Recomputed after the status change so the caller sees the published state, but
+  // the media chain is reused — publishing does not alter the script or the audio.
+  const after = episodeGate(id, media);
+  return NextResponse.json({ gate: after ?? gate, media, overridden: !passing });
 }

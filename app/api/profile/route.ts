@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { safeArray } from "@/lib/json";
+
+const EMPTY_PROFILE = { id: "local", interests: "[]", preferred_language: "en", preferred_voice: "af_heart", updated_at: 0 };
 
 export function GET() {
   const db = getDb();
   let prof = db.prepare("SELECT * FROM user_profile WHERE id='local'").get() as Record<string, unknown> | undefined;
   if (!prof) {
-    db.prepare("INSERT INTO user_profile (id, interests, updated_at) VALUES ('local','[]',?)").run(Date.now());
-    prof = db.prepare("SELECT * FROM user_profile WHERE id='local'").get() as Record<string, unknown>;
+    // Creating the empty row on first read is a convenience, not a requirement.
+    // A read-only deployment cannot insert, and failing the request there would
+    // break every page that reads preferences — so fall back to the defaults.
+    try {
+      db.prepare("INSERT INTO user_profile (id, interests, updated_at) VALUES ('local','[]',?)").run(Date.now());
+      prof = db.prepare("SELECT * FROM user_profile WHERE id='local'").get() as Record<string, unknown> | undefined;
+    } catch { /* read-only database */ }
+    prof ??= { ...EMPTY_PROFILE };
   }
-  return NextResponse.json({ ...prof, interests: JSON.parse((prof.interests as string) ?? "[]") });
+  return NextResponse.json({ ...prof, interests: safeArray<string>(prof.interests) });
 }
 
 export async function POST(req: NextRequest) {
