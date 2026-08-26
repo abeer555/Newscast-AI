@@ -38,6 +38,24 @@ export const NEWS_SOURCES: NewsSource[] = [
 
 export const INDIA_SOURCE_IDS = new Set(["hindu", "toi", "ndtv", "hindustan", "news18", "theprint", "scroll", "indiatoday", "firstpost", "thewire"]);
 
+/**
+ * Display names for the `lean` field above.
+ *
+ * This is a static, editor-maintained classification of each outlet — not a
+ * model judgement about any individual article, and not a quality score. It
+ * lives beside the feed list on purpose: the label is a property of the source
+ * definition, and the UI is required to say so wherever it renders one.
+ */
+export const LEAN_LABEL: Record<NewsSource["lean"] | string, string> = {
+  left: "Left",
+  "center-left": "Centre-left",
+  center: "Centre",
+  "center-right": "Centre-right",
+  right: "Right",
+  state: "State-affiliated",
+  wire: "Wire service",
+};
+
 // Kokoro voice IDs — American English (af_ = American Female, am_ = American Male)
 // Full list: hexgrad/Kokoro-82M on Hugging Face under voices/
 export const VOICES = {

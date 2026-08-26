@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { enrichStories } from "@/lib/enrich";
+import { evidenceForClusters } from "@/lib/pulse";
 import { INDIA_SOURCE_IDS } from "@/lib/sources";
+
+interface IndiaRow extends Record<string, unknown> {
+  id: string;
+  first_seen: number;
+  last_updated: number;
+  article_count: number;
+  source_count: number;
+  topics: string | null;
+  sources: string | null;
+  has_intel: number;
+  has_india_coverage: number;
+}
 
 export async function GET(req: NextRequest) {
   const db = getDb();
@@ -8,14 +22,20 @@ export async function GET(req: NextRequest) {
   const sort = sp.get("sort") ?? "trend";
   const limit = Math.min(60, parseInt(sp.get("limit") ?? "30"));
   const search = sp.get("q");
+  const category = sp.get("category");
+  const since = sp.get("since"); // hour | today | week
 
   let orderBy = "c.trend_score DESC";
   if (sort === "recent") orderBy = "c.last_updated DESC";
   if (sort === "coverage") orderBy = "source_count DESC";
+  if (sort === "velocity") orderBy = "c.velocity DESC";
 
   const clauses: string[] = [];
   const params: unknown[] = [];
   if (search) { clauses.push("c.title LIKE ?"); params.push(`%${search}%`); }
+  if (category && category !== "all") { clauses.push("c.category = ?"); params.push(category); }
+  const windowMs: Record<string, number> = { hour: 3600_000, today: 86_400_000, week: 7 * 86_400_000 };
+  if (since && windowMs[since]) { clauses.push("c.last_updated > ?"); params.push(Date.now() - windowMs[since]); }
 
   const placeholders = Array.from(INDIA_SOURCE_IDS).map(() => "?").join(",");
 
@@ -37,15 +57,52 @@ export async function GET(req: NextRequest) {
     HAVING source_count >= 1
     ORDER BY ${orderBy}
     LIMIT ?
-  `).all(...Array.from(INDIA_SOURCE_IDS), ...Array.from(INDIA_SOURCE_IDS), ...params, limit) as Record<string, unknown>[];
+  `).all(...Array.from(INDIA_SOURCE_IDS), ...Array.from(INDIA_SOURCE_IDS), ...params, limit) as IndiaRow[];
+
+  // Category facets are computed over the unfiltered India pool so the filter
+  // bar can show counts and disable empty options rather than leading to a
+  // dead end.
+  const facets = db.prepare(`
+    SELECT c.category, COUNT(DISTINCT c.id) n
+    FROM clusters c
+    JOIN cluster_articles ca ON ca.cluster_id=c.id
+    JOIN articles a ON a.id=ca.article_id
+    WHERE a.source_id IN (${placeholders})
+    GROUP BY c.category ORDER BY n DESC
+  `).all(...Array.from(INDIA_SOURCE_IDS)) as { category: string; n: number }[];
+
+  // Time-window facets, same purpose: the reader can see there is nothing in the
+  // last hour before clicking into an empty list.
+  const windows: { key: string; label: string; n: number }[] = [
+    { key: "hour", label: "Last hour", n: 0 },
+    { key: "today", label: "Last 24h", n: 0 },
+    { key: "week", label: "Last 7 days", n: 0 },
+  ].map((w) => ({
+    ...w,
+    n: ((db.prepare(`
+      SELECT COUNT(DISTINCT c.id) n
+      FROM clusters c
+      JOIN cluster_articles ca ON ca.cluster_id=c.id
+      JOIN articles a ON a.id=ca.article_id
+      WHERE a.source_id IN (${placeholders}) AND c.last_updated > ?
+    `).get(...Array.from(INDIA_SOURCE_IDS), Date.now() - windowMs[w.key]) as { n: number } | undefined)?.n ?? 0),
+  }));
+
+  const evidence = evidenceForClusters(rows.map((r) => r.id));
 
   return NextResponse.json({
-    stories: rows.map((r) => ({
+    stories: enrichStories(rows).map((r) => ({
       ...r,
-      topics: JSON.parse((r.topics as string) ?? "[]"),
-      sources: ((r.sources as string) ?? "").split(",").filter(Boolean),
+      topics: JSON.parse(r.topics ?? "[]") as string[],
+      sources: (r.sources ?? "").split(",").filter(Boolean),
       has_intel: !!r.has_intel,
       india_origin: !!r.has_india_coverage,
+      evidence: evidence.get(r.id) ?? {
+        claims: 0, confirmed: 0, corroborated: 0, reported: 0, disputed: 0, verified: false, best_tier: "none" as const,
+      },
     })),
+    facets,
+    windows,
+    total: rows.length,
   });
 }

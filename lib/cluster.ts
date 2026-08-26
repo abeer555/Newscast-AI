@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { getDb } from "./db";
+import { HEAT_WINDOW_HOURS, ageHoursOf, heatScore } from "./scoring";
 
 interface ArticleRow {
   id: string;
@@ -21,7 +22,7 @@ function jaccard(a: Set<string>, b: Set<string>): number {
  * Cluster recent articles into stories using greedy token-similarity union-find.
  * A story = articles from >=1 sources covering the same event.
  */
-export function clusterRecent(windowHours = 48): { clusters: number; articles: number } {
+export function clusterRecent(windowHours = HEAT_WINDOW_HOURS): { clusters: number; articles: number } {
   const db = getDb();
   const since = Date.now() - windowHours * 3600_000;
   const articles = db
@@ -102,10 +103,11 @@ export function clusterRecent(windowHours = 48): { clusters: number; articles: n
       }
 
       const sourceCount = new Set(members.map((m) => m.source_id)).size;
-      const ageHours = Math.max(0.5, (now - members[members.length - 1].published_at) / 3600_000);
-      const recencyBoost = Math.max(0.2, 1 - ageHours / windowHours);
-      // trending = coverage breadth × recency × freshness velocity
-      const trend = Math.round((sourceCount * 12 + members.length * 4) * recencyBoost * 10) / 10;
+      const firstSeen = members[members.length - 1].published_at;
+      const ageHours = ageHoursOf(firstSeen, now);
+      // heat + velocity live in lib/scoring.ts so the API can re-derive them and
+      // show the user an itemised breakdown that matches this number exactly.
+      const trend = heatScore(sourceCount, members.length, ageHours, windowHours);
       const velocity = members.length / ageHours;
 
       // topic extraction: most common tokens across cluster
@@ -123,7 +125,7 @@ export function clusterRecent(windowHours = 48): { clusters: number; articles: n
         entities: JSON.stringify([]),
         trend,
         velocity: Math.round(velocity * 100) / 100,
-        first_seen: members[members.length - 1].published_at,
+        first_seen: firstSeen,
         now,
       });
       detachOld.run(clusterId);

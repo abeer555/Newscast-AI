@@ -1,101 +1,210 @@
 "use client";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { api, timeAgo, fmtDuration, useInterval } from "@/lib/store";
 
-interface Story {
-  id: string;
-  title: string;
+/**
+ * India Desk.
+ *
+ * Stories with at least one filing from an Indian outlet. The filters are driven by
+ * facet counts computed over the whole India pool, so an option that would lead to
+ * an empty list is visibly disabled rather than a dead end, and the page states how
+ * membership in this desk is decided instead of leaving it implicit.
+ */
+
+import { useEffect, useState } from "react";
+import { api, useInterval } from "@/lib/store";
+import { Explain } from "@/components/Explain";
+import { Time } from "@/components/Time";
+import { StoryCard, type ListStory } from "@/components/StoryBits";
+
+type Sort = "trend" | "recent" | "coverage" | "velocity";
+type Since = "all" | "hour" | "today" | "week";
+
+const SORTS: { key: Sort; label: string }[] = [
+  { key: "trend", label: "Heat" },
+  { key: "recent", label: "Latest filing" },
+  { key: "coverage", label: "Outlets" },
+  { key: "velocity", label: "Filing rate" },
+];
+
+interface Facet {
   category: string;
-  trend_score: number;
-  velocity: number;
-  article_count: number;
-  source_count: number;
-  sources: string[];
-  last_updated: number;
-  image_url?: string | null;
-  summary?: string | null;
-  india_origin?: boolean;
+  n: number;
+}
+interface Window {
+  key: string;
+  label: string;
+  n: number;
 }
 
 export default function IndiaPage() {
-  const [stories, setStories] = useState<Story[]>([]);
+  const [stories, setStories] = useState<ListStory[]>([]);
+  const [facets, setFacets] = useState<Facet[]>([]);
+  const [windows, setWindows] = useState<Window[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sort, setSort] = useState<"trend" | "recent" | "coverage">("trend");
+  const [sort, setSort] = useState<Sort>("trend");
+  const [category, setCategory] = useState("all");
+  const [since, setSince] = useState<Since>("all");
+  const [q, setQ] = useState("");
+  const [at, setAt] = useState<number | null>(null);
 
   const load = async () => {
-    const j = await api<{ stories: Story[] }>(`/api/stories/india?sort=${sort}&limit=40`);
+    const qs = new URLSearchParams({ sort, limit: "40" });
+    if (category !== "all") qs.set("category", category);
+    if (since !== "all") qs.set("since", since);
+    if (q.trim()) qs.set("q", q.trim());
+    const j = await api<{ stories: ListStory[]; facets: Facet[]; windows: Window[] }>(`/api/stories/india?${qs}`);
     setStories(j.stories);
+    setFacets(j.facets ?? []);
+    setWindows(j.windows ?? []);
+    setAt(Date.now());
     setLoading(false);
   };
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [sort]);
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sort, category, since]);
   useInterval(load, 45_000);
 
-  const max = Math.max(1, ...stories.map((s) => s.trend_score));
+  const max = Math.max(1, ...stories.map((s) => (s.metrics.heat.decayed ? s.metrics.heat.live_score : s.metrics.heat.score)));
+  const totalPool = facets.reduce((n, f) => n + f.n, 0);
+  const filtered = category !== "all" || since !== "all" || !!q.trim();
 
   return (
     <div>
       <div className="page-head">
         <div>
           <h1 className="page-title">🇮🇳 India Desk</h1>
-          <div className="page-sub">Stories from Indian outlets (The Hindu, NDTV, ThePrint, Scroll, India Today, and more). Auto-refreshes every 45s.</div>
+          <div className="page-sub">
+            {totalPool} {totalPool === 1 ? "story" : "stories"} with at least one filing from an Indian outlet.
+            Refreshes every 45s
+            {at !== null && (
+              <>
+                {" · last "}
+                <Time at={at} mode="exact" />
+              </>
+            )}
+            .
+            <Explain title="How a story lands on this desk" label="?" width={350}>
+              <p className="ex-p">
+                A cluster appears here when any article in it comes from an outlet on the India list — The Hindu,
+                NDTV, ThePrint, Scroll, India Today and others.
+              </p>
+              <p className="ex-p">
+                That means a global story covered by an Indian outlet qualifies. The 🇮🇳 marker on a card confirms
+                Indian coverage rather than Indian subject matter, and the desk does not claim otherwise.
+              </p>
+              <p className="ex-p dim">
+                The outlet list is fixed and editor-maintained, not inferred; a missing publication means it has no
+                feed configured, not that it was judged unsuitable.
+              </p>
+            </Explain>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {(["trend", "recent", "coverage"] as const).map((s) => (
-            <button key={s} className={`btn sm ${sort === s ? "" : "outline"}`} onClick={() => setSort(s)}>
-              {s === "trend" ? "🔥 Trending" : s === "recent" ? "🕐 Recent" : "📡 Coverage"}
+      </div>
+
+      <div className="card pad" style={{ marginBottom: 18, display: "grid", gap: 12 }}>
+        <div className="filters">
+          <span className="section-label" style={{ margin: 0, minWidth: 62 }}>
+            Order
+          </span>
+          {SORTS.map((s) => (
+            <button key={s.key} className={`fpill ${sort === s.key ? "on" : ""}`} onClick={() => setSort(s.key)}>
+              {s.label}
             </button>
           ))}
+        </div>
+
+        <div className="filters">
+          <span className="section-label" style={{ margin: 0, minWidth: 62 }}>
+            Updated
+          </span>
+          <button className={`fpill ${since === "all" ? "on" : ""}`} onClick={() => setSince("all")}>
+            Any time<span className="n">{totalPool}</span>
+          </button>
+          {windows.map((w) => (
+            <button
+              key={w.key}
+              className={`fpill ${since === w.key ? "on" : ""}`}
+              onClick={() => setSince(w.key as Since)}
+              disabled={w.n === 0}
+              title={w.n === 0 ? "Nothing in this window" : `${w.n} stories`}
+            >
+              {w.label}
+              <span className="n">{w.n}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="filters">
+          <span className="section-label" style={{ margin: 0, minWidth: 62 }}>
+            Category
+          </span>
+          <button className={`fpill ${category === "all" ? "on" : ""}`} onClick={() => setCategory("all")}>
+            All<span className="n">{totalPool}</span>
+          </button>
+          {facets.map((f) => (
+            <button
+              key={f.category}
+              className={`fpill ${category === f.category ? "on" : ""}`}
+              onClick={() => setCategory(f.category)}
+              disabled={f.n === 0}
+            >
+              {f.category}
+              <span className="n">{f.n}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="row" style={{ gap: 8 }}>
+          <input
+            className="input"
+            placeholder="Search headlines on this desk…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void load();
+            }}
+            style={{ maxWidth: 320 }}
+          />
+          <button className="btn sm" onClick={() => void load()}>
+            Search
+          </button>
+          {filtered && (
+            <button
+              className="btn sm"
+              onClick={() => {
+                setCategory("all");
+                setSince("all");
+                setQ("");
+              }}
+            >
+              Reset filters
+            </button>
+          )}
         </div>
       </div>
 
       {loading ? (
-        <div className="skeleton" style={{ height: 400 }} />
+        <div className="grid c2">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 170 }} />
+          ))}
+        </div>
       ) : stories.length === 0 ? (
-        <div className="card pad" style={{ textAlign: "center", padding: 60 }}>
-          <div style={{ fontSize: 42, marginBottom: 12 }}>🗞</div>
-          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No Indian coverage yet</div>
-          <div className="muted">Feeds are still priming. Try the Command Deck while the Indian sources (The Hindu, NDTV, ThePrint…) catch up.</div>
+        <div className="card pad" style={{ textAlign: "center", padding: 54 }}>
+          <div style={{ fontSize: 38, marginBottom: 12 }}>🗞</div>
+          <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 8 }}>
+            {filtered ? "Nothing matches these filters" : "No Indian coverage yet"}
+          </div>
+          <div className="muted" style={{ maxWidth: 460, margin: "0 auto" }}>
+            {filtered
+              ? "Loosen the window or category — the counts on each button show where there is something to read."
+              : "Feeds are still priming. Try the Command Deck while the Indian sources catch up."}
+          </div>
         </div>
       ) : (
         <div className="grid c2" style={{ alignItems: "start" }}>
           {stories.map((s, i) => (
-            <Link key={s.id} href={`/story/${s.id}`} className="card pad" style={{ position: "relative", overflow: "hidden" }}>
-              {/* heat bar */}
-              <div style={{
-                position: "absolute", left: 0, top: 0, bottom: 0,
-                width: `${(s.trend_score / max) * 100}%`,
-                background: `linear-gradient(90deg, rgba(255,159,67,${0.10 + 0.1 * (s.trend_score / max)}), transparent)`,
-                pointerEvents: "none",
-              }} />
-              <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                <div className={`rank ${i < 3 ? "hot" : ""}`} style={{ fontSize: 26, minWidth: 34, color: i < 3 ? "var(--accent)" : "var(--text-3)" }}>{i + 1}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="story-title" style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                    <div style={{ flex: 1 }}>{s.title}</div>
-                    {s.india_origin && (
-                      <span className="chip" style={{ flexShrink: 0, fontSize: 10.5, padding: "2px 8px", background: "rgba(255,159,67,0.15)", color: "var(--accent-2)" }}>🇮🇳</span>
-                    )}
-                  </div>
-                  <div className="story-meta">
-                    <span className="chip cat">{s.category}</span>
-                    <span className="chip">{s.source_count} source{s.source_count === 1 ? "" : "s"}</span>
-                    <span>{timeAgo(s.last_updated)}</span>
-                  </div>
-                  {s.sources.length > 0 && (
-                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap", margin: "8px 0 0" }}>
-                      {s.sources.slice(0, 4).map((src) => (
-                        <span key={src} className="chip src" style={{ fontSize: 10.5 }}>{src}</span>
-                      ))}
-                      {s.sources.length > 4 && <span className="dim" style={{ fontSize: 11.5 }}>+{s.sources.length - 4} more</span>}
-                    </div>
-                  )}
-                  {s.summary && (
-                    <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.55, marginTop: 8 }}>{s.summary.slice(0, 140)}{s.summary.length > 140 ? "…" : ""}</p>
-                  )}
-                </div>
-              </div>
-            </Link>
+            <StoryCard key={s.id} story={s} rank={i} max={max} accent="255,159,67" />
           ))}
         </div>
       )}

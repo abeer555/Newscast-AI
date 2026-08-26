@@ -318,9 +318,10 @@ async function searchWebImages(
           const data = await res.json() as { results?: { urls?: { raw: string } }[] };
           const results = data.results || [];
           for (let i = 0; i < Math.min(results.length, count); i++) {
-            if (results[i]?.urls?.raw) {
+            const raw = results[i]?.urls?.raw;
+            if (raw) {
               images.push({
-                url: `${results[i].urls.raw}&w=1280&h=720&fit=crop`,
+                url: `${raw}&w=1280&h=720&fit=crop`,
                 path: path.join(framesDir, `${episodeId}_web_${startIndex + i}.jpg`)
               });
             }

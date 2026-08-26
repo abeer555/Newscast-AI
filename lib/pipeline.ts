@@ -15,6 +15,7 @@ import { attestClaims, detectContradictions, VerifiedFact } from "./verification
 import { fuseStory } from "./living";
 import { planEvidenceVisuals, VisualPlan } from "./visualplan";
 import { evaluateEpisodeComprehensive, PipelineEvaluation } from "./evaluate";
+import { episodeGate, persistGate } from "./gates";
 
 
 export interface Evaluation {
@@ -62,9 +63,26 @@ const EVAL_SCHEMA = {
   },
 };
 
+/** Columns the episodes table actually has, so a pre-migration database (the
+ *  read-only demo path never runs ALTER TABLE) drops unknown keys instead of
+ *  failing the whole update and losing the audio with it. */
+let episodeColumns: Set<string> | null = null;
+function knownEpisodeColumns(): Set<string> {
+  if (episodeColumns) return episodeColumns;
+  try {
+    const rows = getDb().prepare("PRAGMA table_info(episodes)").all() as { name: string }[];
+    episodeColumns = new Set(rows.map((r) => r.name));
+  } catch {
+    episodeColumns = new Set();
+  }
+  return episodeColumns;
+}
+
 function setEpisode(id: string, patch: Record<string, unknown>) {
   const db = getDb();
-  const keys = Object.keys(patch);
+  const cols = knownEpisodeColumns();
+  const keys = Object.keys(patch).filter((k) => cols.size === 0 || cols.has(k));
+  if (!keys.length) return;
   try {
     db.prepare(`UPDATE episodes SET ${keys.map((k) => `${k}=?`).join(", ")}, updated_at=? WHERE id=?`).run(...keys.map((k) => patch[k] as string | number | null), Date.now(), id);
   } catch (e) {
@@ -187,17 +205,23 @@ export async function synthesizeCurrentScript(episodeId: string, intelArg?: unkn
     audio_path: result.audioPath,
     audio_duration: result.durationSec,
     audio_segments: result.segmentCount,
+    // Measured per-utterance offsets. Empty when any chunk could not be measured,
+    // so the player falls back to an estimate and says so rather than half-guessing.
+    audio_timeline: result.timeline.length ? JSON.stringify(result.timeline) : null,
     progress: 0.75,
     stage_label: "Evaluating episode quality",
     status: "evaluating",
   });
   episodeProgress(episodeId, "evaluating", 0.75, "Evaluating episode quality");
-  logEvent("pipeline", `Audio synthesized for ${episodeId}: ${result.durationSec}s across ${result.segmentCount} segments`);
+  logEvent(
+    "pipeline",
+    `Audio synthesized for ${episodeId}: ${result.durationSec}s across ${result.segmentCount} segments ` +
+      `(${result.ttsCalls} TTS calls, ${result.cacheHits} reused, timeline ${result.timeline.length ? "measured" : "unavailable"})`,
+  );
 
-  // 4. comprehensive evaluation + publish gate
+  // 4. Editorial critique from the model — advisory only. It is recorded so a
+  // reviewer can read it, but it does not decide anything; the gate below does.
   let evalNote: string | null = null;
-  let publishDecision: "publish" | "needs_review" = "publish";
-  let publishScore = 0;
   try {
     // Build a visual plan proxy (mode weights) so evaluation sees picture-intent
     const stubVisuals: VisualPlan = {
@@ -213,8 +237,6 @@ export async function synthesizeCurrentScript(episodeId: string, intelArg?: unkn
       visualPlan: stubVisuals,
       audioDurationSec: result.durationSec,
     });
-    publishDecision = evaluation.decision;
-    publishScore = evaluation.publish_confidence;
     setEpisode(episodeId, { evaluation: JSON.stringify({
       // keep legacy "scores" key structure intact so the existing UI chip still works
       scores: {
@@ -238,31 +260,46 @@ export async function synthesizeCurrentScript(episodeId: string, intelArg?: unkn
       fact_check_notes: evaluation.fact_check_notes,
       improvements: evaluation.improvements,
     }) });
-    logEvent("pipeline", `Episode ${episodeId} evaluation score=${evaluation.publish_confidence.toFixed(2)} decision=${evaluation.decision}`);
-
-    // Persist publish gate decision
-    try {
-      db.prepare("INSERT OR REPLACE INTO publish_gates (episode_id, score, verdict, reasons, decided_at) VALUES (?,?,?,?,?)")
-        .run(episodeId, publishScore, publishDecision, JSON.stringify(evaluation.reasons), Date.now());
-    } catch { /* non-fatal */ }
+    logEvent("pipeline", `Episode ${episodeId} model advisory score=${evaluation.publish_confidence.toFixed(2)} opinion=${evaluation.decision}`);
   } catch (e) {
     evalNote = `evaluation failed: ${String(e)}`;
     logEvent("error", `Evaluation failed for ${episodeId}`, evalNote ?? "");
   }
 
-  // 5. video + publish gate
-  const isPublished = publishDecision === "publish";
+  // 5. The gate. Nine deterministic checks over what was actually produced —
+  // claim backing, evidence strength, contradiction disclosure, syndication
+  // honesty, audio, timings, subtitle fit, provenance. The model's opinion above
+  // is not an input. A publish decision here is reproducible and itemised, which
+  // is the whole point: a held episode can always say exactly what to fix.
+  const gate = episodeGate(episodeId);
+  if (gate) persistGate(gate);
+  const isPublished = gate ? gate.verdict === "publish" : false;
   const publishedAt = isPublished ? Date.now() : null;
   const hasAudio = result.audioPath !== null;
-  
+  const heldLabel = gate
+    ? `Held — ${gate.headline.replace(/^Held: /, "")}`
+    : "Held — the publish gate could not be evaluated";
+
   setEpisode(episodeId, {
     status: isPublished ? "ready" : "needs_review",
     progress: isPublished ? 1 : 0.95,
-    stage_label: isPublished ? (hasAudio ? "Ready — video render queued" : "Ready (Audio skipped)") : "Held for human review — confidence too low",
+    stage_label: isPublished ? (hasAudio ? "Ready — video render queued" : "Ready (Audio skipped)") : heldLabel,
     published_at: publishedAt,
   });
-  episodeProgress(episodeId, isPublished ? "ready" : "needs_review", isPublished ? 1 : 0.95, isPublished ? (hasAudio ? "Ready — video render queued" : "Ready (Audio skipped)") : "Held for human review");
-  
+  episodeProgress(
+    episodeId,
+    isPublished ? "ready" : "needs_review",
+    isPublished ? 1 : 0.95,
+    isPublished ? (hasAudio ? "Ready — video render queued" : "Ready (Audio skipped)") : heldLabel,
+  );
+  if (gate) {
+    logEvent(
+      "pipeline",
+      `Gate for ${episodeId}: ${gate.score}/100 → ${gate.verdict}` +
+        (gate.blocking.length ? ` (blocking: ${gate.blocking.join(", ")})` : ""),
+    );
+  }
+
   try {
     if (isPublished && hasAudio) {
       if (enqueueVideoRender(episodeId)) {
@@ -476,6 +513,9 @@ async function renderVideoForEpisode(
       const img = await generateImage({ prompt: b.image_prompt, negative: b.negative_prompt, width: 1280, height: 720, seed: hashSeed(`${episodeId}:${i}`), steps: 8 });
       frames.push(img.filePath);
       (board!.beats[i] as Beat & { frame_path?: string }).frame_path = img.filePath;
+      // Provenance is recorded at the moment the frame is made, so nothing
+      // synthetic can later be mistaken for documentary footage.
+      board!.beats[i].image_source = "ai_generated";
     } else {
       // In article_images mode, the frame_path is already populated
       frames.push((b as Beat & { frame_path: string }).frame_path);
@@ -499,9 +539,63 @@ async function renderVideoForEpisode(
     isReel,
   });
 
-  setEpisode(episodeId, { video_path: out.publicPath, video_duration: out.durationSec, video_status: "ready", video_error: null, status: "ready", progress: 1, stage_label: "Ready with video" });
-  episodeProgress(episodeId, "ready", 1, "Ready with video", { video: out.publicPath });
-  logEvent("pipeline", `Video ready for ${episodeId}: ${out.durationSec}s at ${out.publicPath}`);
+  // The video is ready, but whether the *episode* is publishable is not the video's
+  // call — the gate decides that below, once the frames it inspects exist.
+  setEpisode(episodeId, { video_path: out.publicPath, video_duration: out.durationSec, video_status: "ready", video_error: null });
+
+  // A provenance ledger for the finished video: one row per frame stating whether
+  // it is a photograph from the coverage or a generated illustration. Stored so the
+  // claim can be audited later without re-deriving it from the storyboard.
+  try {
+    const ledger = board.beats.map((bt) => ({
+      beat: bt.index,
+      source: bt.image_source ?? "unknown",
+      quality_score: bt.quality_score ?? null,
+      original_url: (bt as Beat & { original_url?: string }).original_url ?? null,
+      caption: bt.caption ?? "",
+    }));
+    const generated = ledger.filter((l) => l.source === "ai_generated").length;
+    setEpisode(episodeId, {
+      visual_provenance: JSON.stringify({
+        recorded_at: Date.now(),
+        mode: videoMode,
+        frames: ledger.length,
+        source_photos: ledger.filter((l) => l.source === "article").length,
+        ai_generated: generated,
+        unlabelled: ledger.filter((l) => l.source === "unknown").length,
+        beats: ledger,
+      }),
+    });
+  } catch (e) {
+    logEvent("error", `Could not record visual provenance for ${episodeId}`, String(e));
+  }
+
+  // The gate's provenance check can only pass once frames exist, so re-run it — and
+  // let it, not the render, decide the episode's status. An episode held for an
+  // undisclosed contradiction does not become publishable because a video finished.
+  let label = "Ready with video";
+  try {
+    const gate = episodeGate(episodeId);
+    if (gate) {
+      persistGate(gate);
+      const cleared = gate.verdict === "publish";
+      label = cleared ? "Ready with video" : `Held — ${gate.headline.replace(/^Held: /, "")}`;
+      setEpisode(episodeId, {
+        status: cleared ? "ready" : "needs_review",
+        progress: cleared ? 1 : 0.95,
+        stage_label: label,
+        published_at: cleared ? Date.now() : null,
+      });
+    } else {
+      setEpisode(episodeId, { status: "ready", progress: 1, stage_label: label });
+    }
+  } catch {
+    // A gate failure must not strand the episode mid-pipeline when the video exists.
+    setEpisode(episodeId, { status: "ready", progress: 1, stage_label: label });
+  }
+
+  episodeProgress(episodeId, "ready", 1, label, { video: out.publicPath });
+  logEvent("pipeline", `Video ready for ${episodeId}: ${out.durationSec}s at ${out.publicPath} (${label})`);
 }
 
 function hashSeed(s: string): number {

@@ -1,59 +1,98 @@
 "use client";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { api, timeAgo, useInterval } from "@/lib/store";
 
-interface Story {
-  id: string; title: string; category: string; trend_score: number; velocity: number;
-  article_count: number; source_count: number; sources: string[]; last_updated: number; spark?: number[];
-}
+/**
+ * Trending.
+ *
+ * Same stories as the deck, ordered by heat, with the ranking's own bias stated on
+ * the page: heat rewards volume and breadth, which is exactly what syndication
+ * produces. Each card therefore carries its evidence badge next to its heat score
+ * so a loud, thinly-sourced story cannot pass for a well-established one.
+ */
+
+import { useEffect, useState } from "react";
+import { api, useInterval } from "@/lib/store";
+import { Explain } from "@/components/Explain";
+import { Time } from "@/components/Time";
+import { StoryCard, type ListStory } from "@/components/StoryBits";
+
+type Sort = "trend" | "velocity" | "coverage" | "recent";
+
+const SORTS: { key: Sort; label: string; basis: string }[] = [
+  { key: "trend", label: "Heat", basis: "(12 × outlets + 4 × filings) × recency decay. Attention, not importance." },
+  { key: "velocity", label: "Filing rate", basis: "Stored articles-per-hour for the cluster. A burst of wire copy ranks highly here." },
+  { key: "coverage", label: "Outlets", basis: "Distinct outlets carrying the story, before independence is taken into account." },
+  { key: "recent", label: "Latest filing", basis: "Most recently updated cluster first, regardless of how big the story is." },
+];
 
 export default function TrendingPage() {
-  const [stories, setStories] = useState<Story[]>([]);
+  const [stories, setStories] = useState<ListStory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sort, setSort] = useState<Sort>("trend");
+  const [at, setAt] = useState<number | null>(null);
 
   const load = async () => {
-    const j = await api<{ stories: Story[] }>("/api/stories?sort=trend&limit=24");
+    const j = await api<{ stories: ListStory[] }>(`/api/stories?sort=${sort}&limit=24`);
     setStories(j.stories);
+    setAt(Date.now());
     setLoading(false);
   };
-  useEffect(() => { void load(); }, []);
-  useInterval(load, 30000);
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sort]);
+  useInterval(load, 30_000);
 
-  const max = Math.max(1, ...stories.map((s) => s.trend_score));
+  const max = Math.max(1, ...stories.map((s) => (s.metrics.heat.decayed ? s.metrics.heat.live_score : s.metrics.heat.score)));
+  const active = SORTS.find((s) => s.key === sort)!;
 
   return (
     <div>
       <div className="page-head">
         <div>
           <h1 className="page-title">Trending</h1>
-          <div className="page-sub">Ranked by coverage breadth × velocity × recency. Auto-refreshes every 30s.</div>
+          <div className="page-sub">
+            {active.basis} Refreshes every 30s
+            {at !== null && (
+              <>
+                {" · last "}
+                <Time at={at} mode="exact" />
+              </>
+            )}
+            .
+          </div>
+        </div>
+        <div className="filters">
+          {SORTS.map((s) => (
+            <button key={s.key} className={`fpill ${sort === s.key ? "on" : ""}`} onClick={() => setSort(s.key)} title={s.basis}>
+              {s.label}
+            </button>
+          ))}
+          <Explain title="What these orderings reward" label="?" width={360}>
+            {SORTS.map((s) => (
+              <p className="ex-p" key={s.key}>
+                <b>{s.label}</b> — {s.basis}
+              </p>
+            ))}
+            <p className="ex-p dim">
+              None of these is a quality ranking. The evidence badge on each card is the corroboration measure; it is
+              deliberately shown next to the heat score so the two cannot be confused.
+            </p>
+          </Explain>
         </div>
       </div>
-      {loading ? <div className="skeleton" style={{ height: 400 }} /> : (
+
+      {loading ? (
+        <div className="grid c2">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 170 }} />
+          ))}
+        </div>
+      ) : stories.length === 0 ? (
+        <div className="empty">Nothing ingested yet. Run a news cycle from the Command Deck.</div>
+      ) : (
         <div className="grid c2" style={{ alignItems: "start" }}>
           {stories.map((s, i) => (
-            <Link href={`/story/${s.id}`} key={s.id} className="card pad" style={{ position: "relative", overflow: "hidden" }}>
-              {/* heat bar */}
-              <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(s.trend_score / max) * 100}%`, background: `linear-gradient(90deg, rgba(255,91,127,${0.10 + 0.1 * (s.trend_score / max)}), transparent)`, pointerEvents: "none" }} />
-              <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                <div className={`rank ${i < 3 ? "hot" : ""}`} style={{ fontSize: 26, minWidth: 34 }}>{i + 1}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 650, fontSize: 15, lineHeight: 1.4, marginBottom: 8 }}>{s.title}</div>
-                  <div style={{ display: "flex", gap: 7, flexWrap: "wrap", fontSize: 12 }}>
-                    <span className="chip cat">{s.category}</span>
-                    <span className="chip src">{s.source_count} sources</span>
-                    <span className="chip">{s.article_count} articles</span>
-                    <span className="chip trend">▲ velocity {s.velocity}/h</span>
-                    <span className="dim">{timeAgo(s.last_updated)}</span>
-                  </div>
-                </div>
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontFamily: "var(--font-display)", fontSize: 24, fontWeight: 800, color: i < 3 ? "var(--hot)" : "var(--text)" }}>{Math.round(s.trend_score)}</div>
-                  <div className="score-label">heat</div>
-                </div>
-              </div>
-            </Link>
+            <StoryCard key={s.id} story={s} rank={i} max={max} />
           ))}
         </div>
       )}

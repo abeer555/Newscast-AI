@@ -219,6 +219,35 @@ function migrate(db: Database.Database) {
     db.exec("ALTER TABLE episodes ADD COLUMN video_mode TEXT DEFAULT 'local'");
   } catch { /* column already exists — safe to ignore */ }
 
+  // Additive migrations for the evidence + provenance layer. Each is wrapped
+  // individually so a partially-migrated database still reaches the final shape.
+  const migrations: string[] = [
+    // Claim-level verification detail, so the UI can show a tier with its basis
+    // rather than an unexplained percentage.
+    "ALTER TABLE cluster_facts ADD COLUMN tier TEXT",                    // confirmed | corroborated | reported | disputed | unverified
+    "ALTER TABLE cluster_facts ADD COLUMN outlet_count INTEGER DEFAULT 0",
+    "ALTER TABLE cluster_facts ADD COLUMN independent_count INTEGER DEFAULT 0",
+    "ALTER TABLE cluster_facts ADD COLUMN first_reported_by TEXT",
+    "ALTER TABLE cluster_facts ADD COLUMN first_reported_at INTEGER",
+    "ALTER TABLE cluster_facts ADD COLUMN topic TEXT",
+    "ALTER TABLE cluster_facts ADD COLUMN variants_json TEXT",           // per-outlet phrasings of the same claim
+    "ALTER TABLE cluster_facts ADD COLUMN tier_reason TEXT",             // plain-English justification
+    // When verification last ran for a story, so the dossier can say so instead
+    // of looking empty for unexplained reasons.
+    "ALTER TABLE clusters ADD COLUMN verified_at INTEGER",
+    "ALTER TABLE clusters ADD COLUMN verify_status TEXT",                // idle | running | done | failed
+    // Measured audio timings per spoken utterance — the backbone of
+    // evidence-backed playback and claim -> audio -> video linking.
+    "ALTER TABLE episodes ADD COLUMN audio_timeline TEXT",
+    // Provenance for each generated visual (source photo vs AI illustration).
+    "ALTER TABLE episodes ADD COLUMN visual_provenance TEXT",
+  ];
+  for (const sql of migrations) {
+    try {
+      db.exec(sql);
+    } catch { /* column already exists — safe to ignore */ }
+  }
+
   seedSources(db);
   seedDemoData(db);
 }

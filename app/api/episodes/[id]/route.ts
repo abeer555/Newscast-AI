@@ -11,8 +11,20 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     script: ep.script ? JSON.parse(ep.script as string) : null,
     evaluation: ep.evaluation ? JSON.parse(ep.evaluation as string) : null,
     storyboard: ep.storyboard ? JSON.parse(ep.storyboard as string) : null,
+    visual_provenance: ep.visual_provenance ? safeParse(ep.visual_provenance as string) : null,
     generation_cache: undefined,
+    // The raw timeline is large and only useful via /gate, which returns
+    // per-segment bounds already resolved.
+    audio_timeline: undefined,
   });
+}
+
+function safeParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 /** PATCH: update script segments / title (user edits in the studio) */
@@ -33,12 +45,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       patch.audio_path = null;
       patch.audio_duration = null;
       patch.evaluation = null;
+      // Measured timings belong to the audio that produced them; keeping them
+      // across an edit would highlight the wrong sentence with total confidence.
+      patch.audio_timeline = null;
       patch.status = "script_ready";
       patch.stage_label = "Script edited — needs re-synthesis";
       patch.progress = 0.42;
     }
   }
-  const keys = Object.keys(patch);
+  const cols = new Set((db.prepare("PRAGMA table_info(episodes)").all() as { name: string }[]).map((r) => r.name));
+  const keys = Object.keys(patch).filter((k) => cols.has(k));
   db.prepare(`UPDATE episodes SET ${keys.map((k) => `${k}=?`).join(", ")} WHERE id=?`).run(...keys.map((k) => patch[k] as string | number | null), id);
   return NextResponse.json({ ok: true });
 }

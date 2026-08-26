@@ -58,7 +58,10 @@ const FONT_NAMES = ["Noto Sans", "Noto Sans Devanagari", "Noto Sans Arabic", "No
 
 /** Find a font file that actually covers the script's characters. */
 function findFontForText(text: string): { file: string; family: string } | null {
-  const needs = FONT_CANDIDATES.map((c) => ({ ...c, file: c.files.find((f) => fs.existsSync(f)) })).filter((c) => c.file) as { fam: string; file: string }[];
+  const needs = FONT_CANDIDATES.flatMap((c) => {
+    const file = c.files.find((f) => fs.existsSync(f));
+    return file ? [{ family: c.fam, file }] : [];
+  });
   if (needs.length === 0) return null;
   const devanagari = /[\u0900-\u097F\uA8E0-\uA8FF]/.test(text);
   const chinese = /[\u4E00-\u9FFF\u3400-\u4DBF]/.test(text);
@@ -67,10 +70,10 @@ function findFontForText(text: string): { file: string; family: string } | null 
   if (chinese && cjkzh) return { family: cjkzh, file: "/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf" };
   // fall back to the first family whose file exists
   if (devanagari) {
-    const dn = needs.find((c) => c.fam.includes("Devanagari"));
+    const dn = needs.find((c) => c.family.includes("Devanagari"));
     if (dn) return dn;
   }
-  const generic = needs.find((c) => c.fam === "Noto Sans") ?? needs[0];
+  const generic = needs.find((c) => c.family === "Noto Sans") ?? needs[0];
   return generic;
 }
 

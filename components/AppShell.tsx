@@ -11,6 +11,7 @@ const NAV = [
   { href: "/library", label: "Podcast Library", icon: WavesIcon },
   { href: "/studio", label: "Studio", icon: MicIcon },
   { href: "/analytics", label: "Analytics", icon: ChartIcon },
+  { href: "/methodology", label: "Methodology", icon: BeakerIcon },
   { href: "/settings", label: "Personalize", icon: SlidersIcon },
 ];
 
@@ -42,6 +43,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           useStore.getState().trackApiStart(e.id, e.name);
         } else {
           useStore.getState().trackApiEnd(e.id, e.status);
+        }
+        // Deliberately console-only. Live model call timings are engineering
+        // telemetry, not something a reader of the news should be shown; the
+        // floating overlay it used to render covered the interface and invited
+        // the reading that the product is a demo of API plumbing. The store
+        // still records them for the Analytics page.
+        if (typeof console !== "undefined") {
+          const line = `[model_api] ${e.name} ${e.status}${e.ms ? ` ${e.ms}ms` : ""}`;
+          if (e.status === "error") console.warn(line);
+          else console.debug(line);
         }
       });
       return () => es.close();
@@ -82,7 +93,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
       <main className="main">{children}</main>
       <Toasts />
-      <ApiTracker />
     </div>
   );
 }
@@ -106,21 +116,10 @@ function WavesIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="curre
 function MicIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>; }
 function ChartIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/></svg>; }
 function SlidersIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/></svg>; }
+function BeakerIcon() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18"><path d="M9 3h6M10 3v6l-4 8a3 3 0 0 0 2.7 4h6.6A3 3 0 0 0 18 17l-4-8V3"/><path d="M7.5 14h9"/></svg>; }
 
-function ApiTracker() {
-  const apiRequests = useStore((s) => s.apiRequests);
-  if (!apiRequests || apiRequests.length === 0) return null;
-  return (
-    <div style={{ position: "fixed", bottom: 16, left: 16, background: "rgba(10,10,10,0.8)", backdropFilter: "blur(12px)", border: "1px solid var(--line-soft)", padding: "12px 14px", borderRadius: 12, fontSize: 11, zIndex: 9999, width: 280, display: "flex", flexDirection: "column", gap: 6, maxHeight: "35vh", overflowY: "auto", pointerEvents: "auto" }}>
-      <div style={{ fontWeight: 600, color: "var(--text-3)", letterSpacing: 1.2, textTransform: "uppercase", fontSize: 10, marginBottom: 4 }}>Model API Tracker</div>
-      {apiRequests.map(r => (
-        <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontFamily: "var(--font-mono)" }}>
-          <span style={{ color: r.status === "error" ? "var(--bad)" : "var(--text)", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", flex: 1, paddingRight: 8 }}>{r.url}</span>
-          <span style={{ color: r.status === "pending" ? "var(--warm)" : r.status === "error" ? "var(--bad)" : "var(--good)", flexShrink: 0 }}>
-            {r.status === "pending" ? "…" : `${r.ms}ms`}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
+/* The floating "Model API Tracker" overlay that used to live here has been
+   removed. Per-call model latencies are engineering telemetry; rendering them
+   over the interface made the product read as a demo of API plumbing rather than
+   a newsroom. The timings are still captured in the store (see the model_api
+   listener above) and surfaced on the Analytics page. */
